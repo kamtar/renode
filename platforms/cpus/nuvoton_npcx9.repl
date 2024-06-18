@@ -62,23 +62,27 @@ cr_uart4: UART.NPCX_UART @ sysbus 0x400E6000
     IRQ -> nvicIrq39@0
     DMAReceive -> mdma4@0
 
-itim32_1: Timers.NPCX_ITIM32 @ sysbus 0x400B0000
+itim32_1: Timers.NPCX_ITIM @ sysbus 0x400B0000
     -> nvic@28
 
-itim32_2: Timers.NPCX_ITIM32 @ sysbus 0x400B2000
+itim32_2: Timers.NPCX_ITIM @ sysbus 0x400B2000
     -> nvic@27
 
-itim32_3: Timers.NPCX_ITIM32 @ sysbus 0x400B4000
+itim32_3: Timers.NPCX_ITIM @ sysbus 0x400B4000
     -> nvic@17
 
-itim32_4: Timers.NPCX_ITIM32 @ sysbus 0x400B6000
+itim32_4: Timers.NPCX_ITIM @ sysbus 0x400B6000
     -> nvic@43
 
-itim32_5: Timers.NPCX_ITIM32 @ sysbus 0x400B8000
+itim32_5: Timers.NPCX_ITIM @ sysbus 0x400B8000
     -> nvic@44
 
-itim32_6: Timers.NPCX_ITIM32 @ sysbus 0x400BA000
+itim32_6: Timers.NPCX_ITIM @ sysbus 0x400BA000
     -> nvic@45
+
+itim64: Timers.NPCX_ITIM @ sysbus 0x400BE000
+    is64Bit: true
+    -> nvic@58
 
 image_type: Memory.ArrayMemory @ sysbus 0x4000C009
     size: 0x1
@@ -160,6 +164,30 @@ gpioe: GPIOPort.NPCX_GPIO @ sysbus 0x4009D000
 
 gpiof: GPIOPort.NPCX_GPIO @ sysbus 0x4009F000
 
+smbus0: I2C.NPCX_SMBus @ sysbus 0x40009000
+    IRQ -> nvic@13
+
+smbus1: I2C.NPCX_SMBus @ sysbus 0x4000B000
+    IRQ -> nvic@14
+
+smbus2: I2C.NPCX_SMBus @ sysbus 0x400C0000
+    IRQ -> nvic@36
+
+smbus3: I2C.NPCX_SMBus @ sysbus 0x400C2000
+    IRQ -> nvic@37
+
+smbus4: I2C.NPCX_SMBus @ sysbus 0x40008000
+    IRQ -> nvic@19
+
+smbus5: I2C.NPCX_SMBus @ sysbus 0x40017000
+    IRQ -> nvic@20
+
+smbus6: I2C.NPCX_SMBus @ sysbus 0x40018000
+    IRQ -> nvic@16
+
+smbus7: I2C.NPCX_SMBus @ sysbus 0x40019000
+    IRQ -> nvic@8
+
 // DEV_CTL4 register from the System Configuration peripheral
 // Its `Write-Protect Internal Flash` bit is used to force
 // write protection of the internal flash
@@ -205,7 +233,6 @@ sysbus:
         Tag <0x400E1000 0x100> "MTF16-1"
         Tag <0x400E3000 0x100> "MTF16-2"
         Tag <0x400E5000 0x100> "MTF16-3"
-        Tag <0x400BE000 0x100> "ITIM64"
         Tag <0x400D7000 0x100> "LTC"
         Tag <0x40080000 0x100> "PWM0"
         Tag <0x40082000 0x100> "PWM1"
