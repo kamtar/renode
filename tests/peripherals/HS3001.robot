@@ -16,8 +16,8 @@ Create Machine
 
 Set Enviroment
     [Arguments]                     ${temperature}=0.00  ${humidity}=0.00
-    Execute Command                 ${SENSOR} DefaultTemperature ${temperature}
-    Execute Command                 ${SENSOR} DefaultHumidity ${humidity}
+    Execute Command                 ${SENSOR} Temperature ${temperature}
+    Execute Command                 ${SENSOR} Humidity ${humidity}
 
 Check Enviroment
     [Arguments]                     ${temperature}=0.00  ${humidity}=0.00
@@ -35,7 +35,7 @@ Create RESD File
     ...                             "--frequency", "1"
     ...                             r"${resd_path}"
     Evaluate                        subprocess.run([sys.executable, "${CSV2RESD}", ${args}])  sys,subprocess
-    [Return]                        ${resd_path}
+    RETURN                          ${resd_path}
 
 *** Test Cases ***
 Should Read Temperature And Humidity
@@ -65,9 +65,11 @@ Should Read Samples From RESD
     Create Machine
 
     ${resd_path}=                   Create RESD File  ${SAMPLES_CSV}
+    # Explicitly set temperature and humidity before loading RESD.
+    # Sensor will default to these values after RESD stream ends.
+    Set Enviroment                  temperature=25.56  humidity=30.39
     Execute Command                 ${SENSOR} FeedTemperatureSamplesFromRESD @${resd_path}
     Execute Command                 ${SENSOR} FeedHumiditySamplesFromRESD @${resd_path}
-    Set Enviroment                  temperature=25.56  humidity=30.39
 
     Check Enviroment                temperature=-9.-99  humidity=0.00
     Check Enviroment                temperature=0.00  humidity=20.00

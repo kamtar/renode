@@ -18,7 +18,7 @@ using Antmicro.Renode.Plugins.VerilatorPlugin.Connection.Protocols;
 
 namespace Antmicro.Renode.Peripherals.Verilated
 {
-    public class VerilatedPeripheral : BaseVerilatedPeripheral, IQuadWordPeripheral, IDoubleWordPeripheral, IWordPeripheral, IBytePeripheral, IBusPeripheral, IDisposable, IHasOwnLife, INumberedGPIOOutput
+    public class VerilatedPeripheral : BaseVerilatedPeripheral, IQuadWordPeripheral, IDoubleWordPeripheral, IWordPeripheral, IBytePeripheral, IBusPeripheral, IDisposable, IHasOwnLife, INumberedGPIOOutput, IGPIOReceiver
     {
         public VerilatedPeripheral(Machine machine, int maxWidth, long frequency = VerilogTimeunitFrequency, string simulationFilePathLinux = null, string simulationFilePathWindows = null, string simulationFilePathMacOS = null,
             string simulationContextLinux = null, string simulationContextWindows = null, string simulationContextMacOS = null,
@@ -128,6 +128,11 @@ namespace Antmicro.Renode.Peripherals.Verilated
             }
         }
 
+        public void OnGPIO(int number, bool value)
+        {
+            Write(ActionType.Interrupt, number, (ulong)(value ? 1 : 0));
+        }
+
         public override void HandleReceivedMessage(ProtocolMessage message)
         {
             switch(message.ActionId)
@@ -141,18 +146,22 @@ namespace Antmicro.Renode.Peripherals.Verilated
                 case ActionType.PushByte:
                     this.Log(LogLevel.Noisy, "Writing byte: 0x{0:X} to address: 0x{1:X}", message.Data, message.Address);
                     machine.SystemBus.WriteByte(message.Address, (byte)message.Data);
+                    Respond(ActionType.PushConfirmation, 0, 0);
                     break;
                 case ActionType.PushWord:
                     this.Log(LogLevel.Noisy, "Writing word: 0x{0:X} to address: 0x{1:X}", message.Data, message.Address);
                     machine.SystemBus.WriteWord(message.Address, (ushort)message.Data);
+                    Respond(ActionType.PushConfirmation, 0, 0);
                     break;
                 case ActionType.PushDoubleWord:
                     this.Log(LogLevel.Noisy, "Writing double word: 0x{0:X} to address: 0x{1:X}", message.Data, message.Address);
                     machine.SystemBus.WriteDoubleWord(message.Address, (uint)message.Data);
+                    Respond(ActionType.PushConfirmation, 0, 0);
                     break;
                 case ActionType.PushQuadWord:
                     this.Log(LogLevel.Noisy, "Writing quad word: 0x{0:X} to address: 0x{1:X}", message.Data, message.Address);
                     machine.SystemBus.WriteQuadWord(message.Address, message.Data);
+                    Respond(ActionType.PushConfirmation, 0, 0);
                     break;
                 case ActionType.GetByte:
                     this.Log(LogLevel.Noisy, "Requested byte from address: 0x{0:X}", message.Address);

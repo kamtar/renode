@@ -1,5 +1,7 @@
 *** Variables ***
 ${echo_i2c_peripheral}              ${CURDIR}/echo-i2c-peripheral.py
+@{HUMIDITY_SAMPLES}                 10  20  30  40  50  60  70  80  90  100
+@{TEMPERATURE_SAMPLES}              15  17  19  21  23  25  27  29  31  33
 ${URL}                              https://dl.antmicro.com/projects/renode
 ${HELLO_WORLD_ELF}                  ${URL}/renesas-da1459x-uart_hello_world.elf-s_1302844-67f230aeae16f04f9e6e9e1ac1ab1ceb133dc2a1
 ${HELLO_WORLD_BIN}                  ${URL}/renesas-da1459x-uart_hello_world.bin-s_42820-89e34783fa568d03c826357dceaa80c3637c14e1
@@ -20,6 +22,8 @@ ${SPI_BIN}                          ${URL}/renesas-da1459x-spi_sample.bin-s_4318
 ${SPI_ELF}                          ${URL}/renesas-da1459x-spi_sample.elf-s_1490188-9f030ab673cc588fb2c19ed3da3fde7d973259e7
 ${I2C_BIN}                          ${URL}/renesas-da1459x-i2c_sample.bin-s_36032-0cb6f278b3467dfbbf80f14b8504db7f2552c113
 ${I2C_ELF}                          ${URL}/renesas-da1459x-i2c_sample.elf-s_1500812-4323681e8ecb9c7ca31db357a86e0348477c6894
+${I2C_DMA_BIN}                      ${URL}/renesas-da14592--sdk-i2c_example.bin-s_68956-a27edc575b95fc553d5d626afe5e7c5581be1977
+${I2C_DMA_ELF}                      ${URL}/renesas-da14592--sdk-i2c_example.elf-s_1483872-07e845601c2acfcd439249f3ba3e5d19cdc37445
 
 *** Keywords ***
 Create Machine
@@ -38,7 +42,7 @@ Check Acceleration Values
 
 Create Echo Peripheral
     Execute Command                 machine LoadPlatformDescriptionFromString "dummy: Mocks.DummyI2CSlave @ i2c 0x75"
-    Execute Command                 include @${echo_i2c_peripheral}
+    Execute Command                 include "${echo_i2c_peripheral}"
     Execute Command                 setup_echo_i2c_peripheral "sysbus.i2c.dummy"
 
 *** Test Cases ***
@@ -46,33 +50,68 @@ UART Should Work
     Create Machine                  ${HELLO_WORLD_BIN}    ${HELLO_WORLD_ELF}
     Create Terminal Tester          sysbus.uart1
 
-    Wait For Line On Uart           Hello, world!
+    Wait For Line On Uart           Hello, world!    pauseEmulation=true
+    Provides                        machine-after-hello-world
+
+Watchdog Should Reset Machine Continuously If Not Frozen
+    Requires                        machine-after-hello-world
+    Create Log Tester               5
+
+    # Let's check this sample without GeneralPurposeRegisters containing Watchdog freeze register.
+    # It should reset over and over again without the ability to freeze it.
+    Execute Command                 sysbus Unregister sysbus.gp_regs
+
+    # Failed attempt to freeze watchdog.
+    Wait For Log Entry              WriteDoubleWord to non existing peripheral at 0x50050300, value 0x8
+
+    # And resets all over the place.
+    Wait For Log Entry              sys_wdog: Reseting machine
+    Wait For Log Entry              sys_wdog: Reseting machine
+    Wait For Log Entry              sys_wdog: Reseting machine
+
+Freezing Watchdog Should Work
+    Requires                        machine-after-hello-world
+    Create Log Tester               5
+    Execute Command                 logLevel -1 sysbus.sys_wdog
+    Execute Command                 sysbus LogPeripheralAccess sysbus.gp_regs
+
+    # Sample freezes Watchdog after reaching limit which prevents resetting machine.
+    Wait For Log Entry              sys_wdog: Limit reached
+    Wait For Log Entry              WriteUInt32 to 0x0 (SetFreeze), value 0x8
+    Wait For Log Entry              sys_wdog: Freeze set
+
+    Should Not Be In Log            sys_wdog: Resetting machine
 
 Test Watchdog
     Create Machine          ${WATCHDOG_BIN}  ${WATCHDOG_ELF}
 
-    Create Log Tester       10
-    Execute Command         logLevel -1 sysbus.wdog
+    Create Log Tester       5    defaultPauseEmulation=true
+    Execute Command         logLevel -1 sysbus.sys_wdog
 
-    Wait For Log Entry      wdog: Ticker value set to: 0x1FFF
+    Wait For Log Entry      sys_wdog: Ticker value set to: 0x1FFF
 
-    # The application initializes the wdog and then loops to refresh the watchdog 100 times.
+    # The application initializes the sys_wdog and then loops to refresh the watchdog 100 times.
     FOR  ${i}  IN RANGE  100
-        Wait For Log Entry      wdog: Ticker value set to: 0x1FFF
+        Wait For Log Entry      sys_wdog: Ticker value set to: 0x1FFF
     END
 
     # After NMI exception, binary falls into while(true) loop while waiting for the watchdog to reset the machine.
     # We set the quantum and advance immediately to speed up the test.
     Execute Command         emulation SetGlobalQuantum "0.001"
     Execute Command         emulation SetAdvanceImmediately true
+
     # The application loops waiting for the watchdog to reset the machine.
-    Wait For Log Entry      wdog: Limit reached     timeout=85
-    Wait For Log Entry      wdog: Triggering IRQ
-    Execute Command         pause
+    Wait For Log Entry      sys_wdog: Limit reached     timeout=85
+    Wait For Log Entry      sys_wdog: Triggering IRQ
+
+    # hw_watchdog_handle_int freezes watchdog so let's unfreeze it afterwards and wait for reset.
+    Execute Command         sysbus LogPeripheralAccess sysbus.gp_regs
+    Wait For Log Entry      WriteUInt32 to 0x0 (SetFreeze), value 0x8
+    Execute Command         sys_wdog Frozen false
+
     # It should take about 160ms of virtual time after NMI to reset the machine.
-    Execute Command         emulation RunFor "0.17"
-    Wait For Log Entry      wdog: Limit reached
-    Wait For Log Entry      wdog: Reseting machine
+    Wait For Log Entry      sys_wdog: Limit reached    timeout=0.17
+    Wait For Log Entry      sys_wdog: Reseting machine
 
 Test GPADC
     Create Machine                  ${ADC_BIN}   ${ADC_ELF}
@@ -95,11 +134,13 @@ GPIO Should Work
 
 Timer Should Work
     Create Machine                  ${GPT_BIN}     ${GPT_ELF}
-    # Sample code doesn't reload the watchdog
-    Execute Command                 sysbus.wdog Enabled false
     Create Terminal Tester          sysbus.uart1  defaultPauseEmulation=true
 
     Wait For Line On Uart           Hello, world!
+
+    # Let's freeze watchdog cause it isn't done by software.
+    Execute Command                 sysbus.sys_wdog Frozen true
+
     # Timer is configured to fire approx. once per second
     Wait For Line On Uart           Timer tick!  timeout=1.1
     Wait For Line On Uart           Timer tick!  timeout=1.1
@@ -107,9 +148,10 @@ Timer Should Work
 
 DMA Should Work
     Create Machine                  ${DMA_BIN}    ${DMA_ELF}
-    # Sample code doesn't reload the watchdog
-    Execute Command                 sysbus.wdog Enabled false
     Create Terminal Tester          sysbus.uart1
+
+    # Let's freeze watchdog cause it isn't done by software.
+    Execute Command                 sysbus.sys_wdog Frozen true
 
     Wait For Line On Uart           SRC: { 0 1 2 3 4 5 6 7 8 9 }
     Wait For Line On Uart           DEST: { 0 0 0 0 0 0 0 0 0 0 }
@@ -145,10 +187,25 @@ Should Read Samples From ADXL372 Over SPI
     Check Acceleration Values       3  56  12
 
 Should Pass Communication Test With Sample Echo Slave
-    [Tags]                   skip_windows
     Create Machine                  ${I2C_BIN}  ${I2C_ELF}
 
     Create Echo Peripheral
     Create Log Tester               1
 
     Wait For Log Entry              i2c.dummy: Test suite passed  level=Info
+
+I2C Should Work With DMA Triggers
+    Create Machine                  ${I2C_DMA_BIN}    ${I2C_DMA_ELF}
+    Execute Command                 machine LoadPlatformDescriptionFromString "hs3001: Sensors.HS3001 @ i2c 0x44"
+
+    Create Terminal Tester          sysbus.uart1  defaultPauseEmulation=true
+
+    Wait For Line On Uart           I2C init
+
+    FOR    ${index}    ${element}    IN ENUMERATE    @{HUMIDITY_SAMPLES}
+        Execute Command            sysbus.i2c.hs3001 Temperature ${TEMPERATURE_SAMPLES}[${index}]
+        Execute Command            sysbus.i2c.hs3001 Humidity ${HUMIDITY_SAMPLES}[${index}]
+
+        Wait For Line On Uart      Successfully read I2C
+        Wait For Line On Uart      Hum: ${HUMIDITY_SAMPLES}[${index}] Temp: ${TEMPERATURE_SAMPLES}[${index}]
+    END

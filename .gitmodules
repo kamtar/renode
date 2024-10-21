@@ -1,6 +1,6 @@
 [submodule "src/Infrastructure"]
 	path = src/Infrastructure
-url=https://github.com/kamtar/renode-infrastructure.git
+	url = https://github.com/renode/renode-infrastructure.git
 [submodule "lib/termsharp"]
 	path = lib/termsharp
 	url = https://github.com/antmicro/termsharp.git
@@ -41,3 +41,6 @@ url=https://github.com/kamtar/renode-infrastructure.git
 [submodule "tools/dts2repl"]
 	path = tools/dts2repl
 	url = https://github.com/antmicro/dts2repl.git
+[submodule "tools/models_analyzer"]
+	path = tools/models_analyzer
+	url = https://github.com/antmicro/renode-models-analyzer.git

@@ -15,6 +15,7 @@ Create Machine
 Create Multicore Machine
     Execute Command                 mach create
     Execute Command                 machine LoadPlatformDescription @platforms/cpus/cortex-r52_smp.repl
+    Execute Command                 machine SetSerialExecution True
 
 Wait For Lines Per Thread
     [Arguments]                     @{lines}  ${testerId}
@@ -44,7 +45,7 @@ Wait For Hello Sample
     Wait For Line On Uart           HiRTOS: Idle thread started  testerId=${testerId}
 
     # Then, make sure each of them has been woken up at least once
-    Wait For Lines Per Thread       Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups 2  testerId=${testerId}
+    Wait For Lines Per Thread       Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups [^1]\d*  testerId=${testerId}
 
 Wait For Hello Partitions Sample
     [Arguments]                     ${testerId}  ${cpu}=0
@@ -71,8 +72,8 @@ Wait For Hello Partitions Sample
     Wait For Line On Uart           HiRTOS: Idle thread started  testerId=${testerId}
 
     # Finally, make sure each thread has been woken up at least once
-    Wait For Lines Per Thread       Partition 1: Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups 2
-    ...                             Partition 2: Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups 2
+    Wait For Lines Per Thread       Partition 1: Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups [^1]\d*
+    ...                             Partition 2: Thread %THREAD% \\(id %ID%, prio %PRIO%\\): .* Wakeups [^1]\d*
     ...                             testerId=${testerId}
 
 *** Test Cases ***

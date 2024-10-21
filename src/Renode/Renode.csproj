@@ -49,6 +49,12 @@
     <Reference Include="CookComputing.XmlRpcV2">
       <HintPath>..\..\lib\resources\libraries\CookComputing.XmlRpcV2.dll</HintPath>
     </Reference>
+    <Reference Include="NetMQ">
+      <HintPath>..\..\lib\resources\libraries\NetMQ.dll</HintPath>
+    </Reference>
+    <Reference Include="AsyncIO">
+      <HintPath>..\..\lib\resources\libraries\AsyncIO.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -113,6 +119,7 @@
     <Compile Include="Network\RangeLossMediumFunction.cs" />
     <Compile Include="Network\RangeMediumFunction.cs" />
     <Compile Include="Backends\Terminals\UartPtyTerminal.cs" />
+    <Compile Include="Plugins\ZephyrMode.cs" />
     <Compile Include="PlatformDescription\UserInterface\MonitorInitHandler.cs" />
     <Compile Include="PlatformDescription\UserInterface\PlatformDescriptionMachineExtensions.cs" />
     <Compile Include="Connectors\GPIOConnector.cs" />
@@ -138,6 +145,7 @@
     <Compile Include="Network\ExternalControl\IInstanceBasedCommand.cs" />
     <Compile Include="Network\ExternalControl\GetMachine.cs" />
     <Compile Include="Network\ExternalControl\ADC.cs" />
+    <Compile Include="Network\ExternalControl\GPIOPort.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ProjectExtensions>
@@ -206,6 +214,10 @@
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-i386.csproj">
       <Project>{53222114-707C-4EFD-8289-2728351FB7E9}</Project>
       <Name>cores-i386</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-x86_64.csproj">
+      <Project>{A3222114-707C-4EFD-8289-2728351FB7E9}</Project>
+      <Name>cores-x86_64</Name>
     </ProjectReference>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-ppc.csproj">
       <Project>{23222114-707C-4EFD-8289-2728351FB7E9}</Project>

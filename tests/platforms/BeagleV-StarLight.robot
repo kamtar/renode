@@ -14,8 +14,10 @@ Create Machine
     [Arguments]              ${machine}
     Execute Command          $name="${machine}"
     Execute Command          include @${SCRIPT}
+    # We enable serial execution to ensure a deterministic result as this test uses 2 machines, each with 2 CPUs
+    Execute Command          emulation SetGlobalSerialExecution True
     ${tester} =              Create Terminal Tester   ${UART}   40   ${machine}   defaultPauseEmulation=True
-    [Return]                 ${tester}
+    RETURN                   ${tester}
 
 Connect Machines To Switch
     Execute Command          emulation CreateSwitch "switch"
@@ -52,7 +54,7 @@ Should Boot U-Boot
     Verify U-Boot  ${tester0}
     Verify U-Boot  ${tester1}
 
-    Provides                 booted-uboot   Reexecution
+    Provides                 booted-uboot
 
 Should Provide Two Linux Machines With Ethernet Connection
     Requires                 booted-uboot
@@ -81,7 +83,7 @@ Should Provide Two Linux Machines With Ethernet Connection
     Wait For Prompt On Uart  \#                                             testerId=${tester1}                                    
     Write Line To Uart       ifconfig eth0 mtu 440 up ${IP_ADDR1}           testerId=${tester1}  waitForEcho=false
 
-    Provides                 booted-linux   Reexecution
+    Provides                 booted-linux
 
 Should Ping
     Requires                 booted-linux

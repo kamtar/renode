@@ -2,6 +2,7 @@
   <PropertyGroup>
     <TargetFrameworks Condition="$(OS) != 'Windows_NT'">net6.0</TargetFrameworks>
     <TargetFrameworks Condition="$(OS) == 'Windows_NT'">net6.0-windows10.0.17763.0</TargetFrameworks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>false</Deterministic>
     <OutputPath>..\..\output\bin\$(Configuration)</OutputPath>
     <OutputType>Exe</OutputType>
@@ -24,13 +25,19 @@
     <DefineConstants>$(DefineConstants);GUI_DISABLED</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Mono.Posix.NETStandard" Version="1.0.0" Condition=" $(OS) != 'Windows_NT'" />
+    <PackageReference Include="Mono.Posix" Version="7.1.0-final.1.21458.1" Condition=" $(OS) != 'Windows_NT'"/>
     <PackageReference Include="IronPython.StdLib" Version="2.7.11" />
+    <PackageReference Include="NetMQ" Version="4.0.1.12" />
+    <PackageReference Include="System.ServiceModel.Http" Version="6.0.0" />
+
     <Reference Include="Sprache">
       <HintPath>..\..\lib\resources\libraries\Sprache.dll</HintPath>
     </Reference>
     <Reference Include="CookComputing.XmlRpcV2">
       <HintPath>..\..\lib\resources\libraries\CookComputing.XmlRpcV2.dll</HintPath>
+    </Reference>
+    <Reference Include="AsyncIO">
+      <HintPath>..\..\lib\resources\libraries\AsyncIO.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -47,6 +54,7 @@
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-arm_NET.csproj"/>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-arm-m_NET.csproj"/>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-i386_NET.csproj"/>
+    <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-x86_64_NET.csproj"/>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-ppc_NET.csproj"/>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-ppc64_NET.csproj"/>
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-sparc_NET.csproj"/>
@@ -63,9 +71,6 @@
     <ProjectReference Include="..\Infrastructure\src\Emulator\Cores\cores-arm64_NET.csproj"/>
   </ItemGroup>
   <ItemGroup>
-    <Compile Remove="Properties\AssemblyInfo.cs"/>
-  </ItemGroup>
-  <ItemGroup>
     <EmbeddedResource Include="..\..\lib\resources\images\windows_setup\renode_nobg.ico">
       <Link>Resources\renode_nobg.ico</Link>
       <LogicalName>renode_nobg.ico</LogicalName>
@@ -78,14 +83,20 @@
       <LogicalName>RobotoMono-Regular.ttf</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
-  <Target Name="SetSourceRevisionId" BeforeTargets="PrepareForBuild">
-    <Exec Command="git rev-parse --short=8 HEAD" StandardOutputImportance="Low" ConsoleToMSBuild="True" IgnoreExitCode="False">
-      <Output PropertyName="SourceRevisionId" TaskParameter="ConsoleOutput"/>
-    </Exec>
-    <PropertyGroup>
-      <AssemblyVersion>$([System.IO.File]::ReadAllText(../../tools/version).Trim()).*</AssemblyVersion>
-      <InformationalVersion>$(SourceRevisionId)-$([System.DateTime]::Now.ToString(yyyyMMddhhmm))</InformationalVersion>
-      <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    </PropertyGroup>
+  <Target Name="CreateAssemblyInfo" BeforeTargets="PrepareForBuild">
+    <ItemGroup>
+      <CheckIfAssemblyInfoExists Include="Properties/AssemblyInfo.cs">
+        <AssemblyInfoExists Condition="Exists('Properties/AssemblyInfo.cs')">true</AssemblyInfoExists>
+        <AssemblyInfoExists Condition="!Exists('Properties/AssemblyInfo.cs')">false</AssemblyInfoExists>
+      </CheckIfAssemblyInfoExists>
+    </ItemGroup>
+
+    <Exec Command="cd Properties; ../../../tools/building/createAssemblyInfo.sh" Condition="$(CurrentPlatform) != 'Windows'" />
+    <!--The Powershell pipe is used for running the script without altering execution policy on host machine.-->
+    <Exec Command="cd Properties &amp; powershell &quot;Get-Content ../../../tools/building/createAssemblyInfo.ps1 | powershell -command -&quot;" Condition="$(CurrentPlatform) == 'Windows'" />
+
+    <ItemGroup>
+      <Compile Include="Properties/AssemblyInfo.cs" Condition="!%(CheckIfAssemblyInfoExists.AssemblyInfoExists)" />
+    </ItemGroup>
   </Target>
 </Project>

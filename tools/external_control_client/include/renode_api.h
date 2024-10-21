@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <stdbool.h>
 
 /* Error handling */
 
@@ -34,6 +35,7 @@ typedef struct {
 typedef struct renode renode_t;
 typedef struct renode_machine renode_machine_t;
 typedef struct renode_adc renode_adc_t;
+typedef struct renode_gpio renode_gpio_t;
 
 renode_error_t *renode_connect(const char *port, renode_t **renode);
 renode_error_t *renode_disconnect(renode_t **renode);
@@ -59,3 +61,16 @@ renode_error_t *renode_get_adc(renode_machine_t *machine, const char *name, reno
 renode_error_t *renode_get_adc_channel_count(renode_adc_t *adc, int32_t *count);
 renode_error_t *renode_get_adc_channel_value(renode_adc_t *adc, int32_t channel, uint32_t *value);
 renode_error_t *renode_set_adc_channel_value(renode_adc_t *adc, int32_t channel, uint32_t value);
+
+/* GPIO */
+
+renode_error_t *renode_get_gpio(renode_machine_t *machine, const char *name, renode_gpio_t **gpio);
+renode_error_t *renode_get_gpio_state(renode_gpio_t *gpio, int32_t id, bool *state);
+renode_error_t *renode_set_gpio_state(renode_gpio_t *gpio, int32_t id, bool state);
+
+typedef struct {
+    uint64_t timestamp_us;
+    bool state;
+} renode_gpio_event_data_t;
+
+renode_error_t *renode_register_gpio_state_change_callback(renode_gpio_t *gpio, int32_t id, void *user_data, void (*callback)(void *, renode_gpio_event_data_t *));

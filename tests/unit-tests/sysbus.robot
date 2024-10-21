@@ -17,6 +17,20 @@ ${per-core-memory}=            SEPARATOR=
 
 ${max_32bit_addr}              0xFFFFFFFF
 
+${platform_no_region_specified}   SEPARATOR=${\n}
+...                               """
+...                               mock: Mocks.MockDoubleWordPeripheralWithOnlyRegionReadMethod @ {
+...                               ${SPACE*4}sysbus new Bus.BusMultiRegistration { address: 0x100; size: 0x100; region: "nonexisting" }
+...                               }
+...                               """
+
+${platform_only_region_read}   SEPARATOR=${\n}
+...                            """
+...                            mock: Mocks.MockDoubleWordPeripheralWithOnlyRegionReadMethod @ {
+...                            ${SPACE*4}sysbus new Bus.BusMultiRegistration { address: 0x100; size: 0x100; region: "region" }
+...                            }
+...                            """
+
 *** Keywords ***
 Create Machine With CPU And Two MappedMemory Peripherals
     Execute Command            using sysbus
@@ -41,7 +55,7 @@ Get ${peripheral} Size, Address And Range
     ...    [ re.search('<(0x[0-9A-F]*), .*>', """${ranges}""").group(i) for i in range(2) ]
     ...    modules=re
 
-    [Return]  ${size}  ${address}  ${range}
+    RETURN  ${size}  ${address}  ${range}
 
 ${lock_or_unlock:(Lock|Unlock)} Address Range From ${start} To ${end}
     ${range}=     Evaluate   f"<{ hex(${start}) }, { hex(${end}) }>"
@@ -219,6 +233,10 @@ Test Writing To A Locked Sysbus Range With CPU Context
     Execute Command            machine LoadPlatformDescriptionFromString "mockCpu0: CPU.ARMv7A @ sysbus { cpuType: \\"cortex-a9\\" }"
     Execute Command            machine LoadPlatformDescriptionFromString "mockCpu1: CPU.ARMv7A @ sysbus { cpuType: \\"cortex-a9\\" }"
 
+    # SerialExecution is necessary only because the logs might appear in any order when being run concurrently on two CPUs
+    # and this will cause the tests to timeout
+    Execute Command            machine SetSerialExecution True
+
     Provides                   sysbus-with-mock-cpus
 
     ${new_value_0x100}=        Set Variable  0x66
@@ -326,7 +344,7 @@ Locked MappedMemory Should Not Be Accessible From CPU
 
     # With flash locked, the loads from [r3] and stores to [r3] should be blocked.
     ${result_addr}=  Evaluate  hex(${flash_addr} + 0x1000)
-    Execute Command            cpu SetRegisterUnsafe 3 ${result_addr}
+    Execute Command            cpu SetRegister 3 ${result_addr}
 
     Execute Command            ${ram} WriteDoubleWord 0x00 0xe59f2028  # ldr   r2, [pc, #40] // =0x11111111
     Execute Command            ${ram} WriteDoubleWord 0x04 0xe5832000  # str   r2, [r3]
@@ -458,15 +476,39 @@ Symbols Should Be Dynamically Loaded and Unloaded On Request
 
     Execute Command                sysbus ClearSymbols
     # Global lookup is cleared so both local and global lookup fail
-    Run Keyword And Expect Error   *No symbol with name `main` found*
+    Run Keyword And Expect Error   *Could not find any address for symbol: main*
     ...                            Execute Command   sysbus GetSymbolAddress ${main_symbol_name} context=${cpu}
-    Run Keyword And Expect Error   *No symbol with name `main` found*
+    Run Keyword And Expect Error   *Could not find any address for symbol: main*
     ...                            Execute Command   sysbus GetSymbolAddress ${main_symbol_name}
     
     # Load symbols in the local scope so they are visible only for the given cpu
     Execute Command                sysbus LoadSymbolsFrom ${bin} context=${cpu}
     ${main_address_local}=         Execute Command  sysbus GetSymbolAddress ${main_symbol_name} context=${cpu}
     Should Be Equal As Numbers     ${main_symbol_address}  ${main_address_local}
-    Run Keyword And Expect Error   *No symbol with name `main` found*
+    Run Keyword And Expect Error   *Could not find any address for symbol: main*
     ...                            Execute Command   sysbus GetSymbolAddress ${main_symbol_name}
+
+Should Log All Peripherals Accesses Only When Enabled
+    ${log}=                        Set Variable   peripheral: ReadByte from 0x0 (unknown), returned 0x0.
+    Create Log Tester              0
+    Execute Command                mach create
+    Execute Command                machine LoadPlatformDescriptionFromString "peripheral: Mocks.MockBytePeripheralWithoutTranslations @ sysbus <0x0, +0x8>"
+
+    Execute Command                sysbus LogAllPeripheralsAccess True
+    Execute Command                sysbus ReadByte 0x0
+    Wait For Log Entry             ${log}
+
+    Execute Command                sysbus LogAllPeripheralsAccess False
+    Execute Command                sysbus ReadByte 0x0
+    Should Not Be In Log           ${log}
+
+Should Not Register Platform When Nonexisting Region Is Specified
+    Execute Command                mach create
+    Run Keyword And Expect Error   *No region "nonexisting" is available for Antmicro.Renode.Peripherals.Mocks.MockDoubleWordPeripheralWithOnlyRegionReadMethod*
+    ...                            Execute Command   machine LoadPlatformDescriptionFromString ${platform_no_region_specified}
+
+Should Not Register Region When Only Read Method Is Implemented
+    Execute Command                mach create
+    Run Keyword And Expect Error   *WriteDoubleWord is not specified for region*
+    ...                            Execute Command   machine LoadPlatformDescriptionFromString ${platform_only_region_read}
 

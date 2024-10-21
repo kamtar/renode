@@ -58,15 +58,20 @@ It can be built in the `build` directory from the Renode repository's root direc
 renode$ mkdir build && cmake -DAPP_NAME=run_for -DAPP_SOURCES_DIR=tools/external_control_client/examples/run_for -S tools/external_control_client -B build && cmake --build build
 ```
 
-After starting the server in Renode, the `run_for` application can be used multiple times to progress emulation time.
+After starting the server in Renode, the `run_for` application can be used to progress emulation time multiple times with an ability to run it again and connect to the same server.
+
+Following every executed set it will ask whether to continue with the current configuration, defaults to `No`.
+This prompt also has an option (`c` for change) to provide a new time value, using the same format as the CLI argument, with an optional new number of times to run, defaults to 1. 
 
 The usage is:
 ```
 Usage:
-  ./test_run_for <PORT> <VALUE_WITH_UNIT>
+  ./test_run_for <PORT> <VALUE_WITH_UNIT> [<REPEAT>]
   where:
   * <VALUE_WITH_UNIT> is an integer with a time unit, e.g.: '100ms'
   * accepted time units are 's', 'ms' and 'us' (for microseconds)
+  * <REPEAT> is an optional number of times (default: 1) to run
+  * the simulation for
 ```
 
 ### `adc` example
@@ -87,4 +92,28 @@ Usage:
   where:
   * <VALUE_WITH_UNIT> is an unsigned integer with a voltage unit, e.g.: '100mV'
   * accepted voltage units are 'V', 'mV' and 'uV' (for microvolts)
+```
+
+### `gpio` example
+
+The example application using Renode API can be found in `examples/gpio`.
+
+It can be built in the `build` directory from the Renode repository's root directory with:
+```bash
+renode$ mkdir build && cmake -DAPP_NAME=gpio -DAPP_SOURCES_DIR=tools/external_control_client/examples/gpio -S tools/external_control_client -B build && cmake --build build
+```
+
+
+After starting the server in Renode, the `gpio` application can be used in three different modes.
+
+In the first mode, it returns the current state of a pin. This happens when only the required arguments are provided.
+
+In the second mode, the application can be used to set the state of a pin. This happens when the last argument is either `true` or `false`.
+
+Finally, the application can show GPIO state changes as the simulation is running by subscribing to GPIO state change events. This happens when the last argument is set to `event`.
+
+The usage is:
+```
+Usage:
+  ./gpio <PORT> <MACHINE_NAME> <GPIO_NAME> <NUMBER> [true|false|event]
 ```

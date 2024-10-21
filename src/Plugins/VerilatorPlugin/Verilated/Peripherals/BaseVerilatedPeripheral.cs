@@ -75,6 +75,8 @@ namespace Antmicro.Renode.Peripherals.Verilated
             verilatorConnection.Resume();
         }
 
+        public bool IsPaused => verilatorConnection.IsPaused;
+
         public bool IsConnected => verilatorConnection.IsConnected;
 
         public string SimulationContextLinux
@@ -261,7 +263,7 @@ namespace Antmicro.Renode.Peripherals.Verilated
         {
             if(message.ActionId == ActionType.Error)
             {
-                AbortAndLogError("Operation error!");
+                this.Log(LogLevel.Warning, "Operation error reported by the co-simulation!");
             }
         }
 

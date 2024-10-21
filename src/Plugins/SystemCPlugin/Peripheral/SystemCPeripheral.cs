@@ -233,6 +233,14 @@ namespace Antmicro.Renode.Peripherals.SystemC
 
         public void OnGPIO(int number, bool value)
         {
+            // When GPIO connections are initialized, OnGPIO is called with
+            // false value. The socket is not yet initialized in that case. We
+            // can safely return, no special initialization is required.
+            if(forwardSocket == null)
+            {
+                return;
+            }
+
             BitHelper.SetBit(ref outGPIOState, (byte)number, value);
             var request = new RenodeMessage(RenodeAction.GPIOWrite, 0, 0, 0, outGPIOState);
             SendRequest(request);
@@ -283,7 +291,8 @@ namespace Antmicro.Renode.Peripherals.SystemC
 
         private ulong GetCurrentVirtualTimeUS()
         {
-            return machine.LocalTimeSource.ElapsedVirtualTime.TotalMicroseconds;
+            // Truncate, as the SystemC integration uses microsecond resolution
+            return (ulong)machine.LocalTimeSource.ElapsedVirtualTime.TotalMicroseconds;
         }
 
         private void StartSystemCProcess(string systemcExecutablePath, string connectionParams)
@@ -339,7 +348,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
             timer.LimitReached += () =>
             {
                 var request = new RenodeMessage(RenodeAction.Timesync, 0, 0, 0, GetCurrentVirtualTimeUS());
-                var response = SendRequest(request);
+                SendRequest(request);
             };
         }
 

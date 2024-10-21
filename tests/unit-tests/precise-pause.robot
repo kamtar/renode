@@ -19,6 +19,19 @@ Create Machine With Button And LED
     Create Terminal Tester   sysbus.usart${usart}
     Create LED Tester        sysbus.gpioPort${led_port}.led  defaultTimeout=2
 
+Create Machine With Trivial Uart
+    ${platform}=             Catenate  SEPARATOR=${\n}
+    ...  """
+    ...  cpu: CPU.ARMv7R @ sysbus
+    ...  ${SPACE*4}cpuType: "cortex-r8"
+    ...  mem: Memory.MappedMemory @ sysbus 0x0
+    ...  ${SPACE*4}size: 0x400
+    ...  uart: UART.TrivialUart @ sysbus <0x1000, +0x100>
+    ...  """
+    Execute Command          using sysbus
+    Execute Command          mach create
+    Execute Command          machine LoadPlatformDescriptionFromString ${platform}
+
 Emulation Should Be Paused
     ${st}=                   Execute Command  emulation IsStarted
     Should Contain           ${st}  False
@@ -82,7 +95,7 @@ Terminal Tester Assert Should Precisely Pause Emulation
     Execute Command          gpioPortB.button Press
 
     ${l}=                    Wait For Line On Uart  Button pressed at (\\d+)  pauseEmulation=true  treatAsRegex=true
-    Should Be Equal          ${l.groups[0]}  6401
+    Should Be Equal          ${l.groups[0]}  4896
 
     Emulation Should Be Paused At Time  00:00:00.000226
     PC Should Be Equal       0x8002c0a  # this is the next instruction after STR that writes to TDR in LL_USART_TransmitData8
@@ -97,7 +110,7 @@ Emulation Should Pause Precisely Between Translation Blocks
     Execute Command          gpioPortB.button Press
 
     ${l}=                    Wait For Line On Uart  Button pressed at (\\d+)  pauseEmulation=true  treatAsRegex=true
-    Should Be Equal          ${l.groups[0]}  6401
+    Should Be Equal          ${l.groups[0]}  4213
 
     Emulation Should Be Paused At Time  00:00:00.000226
     PC Should Be Equal       0x8002c0a  # this is the next instruction after STR that writes to TDR in LL_USART_TransmitData8
@@ -148,11 +161,11 @@ LED Tester Assert Should Precisely Pause Emulation
     Create Machine With Button And LED  blinky
 
     Assert LED State         true  pauseEmulation=true
-    Emulation Should Be Paused At Time  00:00:00.000120
+    Emulation Should Be Paused At Time  00:00:00.000115
     PC Should Be Equal       0x8002a48  # this is the next instruction after STR that writes to BSRR in gpio_stm32_port_set_bits_raw
 
     Assert LED State         false  pauseEmulation=true
-    Emulation Should Be Paused At Time  00:00:01.000211
+    Emulation Should Be Paused At Time  00:00:01.000157
     PC Should Be Equal       0x80028a4  # this is the next instruction after STR that writes to BRR in LL_GPIO_ResetOutputPin
 
     Provides                 synced-blinky
@@ -172,13 +185,13 @@ LED Tester Assert Is Blinking Should Precisely Pause Emulation
     Requires                 synced-blinky
 
     Assert LED Is Blinking   testDuration=5  onDuration=1  offDuration=1  pauseEmulation=true
-    Emulation Should Be Paused At Time  00:00:06.000300
+    Emulation Should Be Paused At Time  00:00:06.000200
 
 LED Tester Assert Duty Cycle Should Precisely Pause Emulation
     Requires                 synced-blinky
 
     Assert LED Duty Cycle    testDuration=5  expectedDutyCycle=0.5  pauseEmulation=true
-    Emulation Should Be Paused At Time  00:00:06.000300
+    Emulation Should Be Paused At Time  00:00:06.000200
 
 LED And Terminal Testers Should Cooperate
     Create Machine With Button And LED  led_shell
@@ -244,3 +257,25 @@ Log Tester Should Not Be In Log Assert Should Not Pause Emulation Later If The M
 
     Execute Command  emulation RunFor "3"
     Emulation Should Be Paused At Time  00:00:03.001297
+
+Should Finish Instructions Before Pausing
+    Create Machine With Trivial Uart
+    Create Terminal Tester   sysbus.uart  defaultPauseEmulation=true
+
+    Execute Command          cpu SetRegister 0 0x1000  # UART write address
+    Execute Command          cpu SetRegister 1 0x4F  # 'O'
+    Execute Command          cpu SetRegister 2 0x6E  # 'n'
+    Execute Command          cpu SetRegister 3 0x65  # 'e'
+    Execute Command          cpu SetRegister 4 0x0A  # '\n'
+    Execute Command          cpu SetRegister 5 0x54  # 'T'
+    Execute Command          cpu SetRegister 6 0x77  # 'w'
+    Execute Command          cpu SetRegister 7 0x6F  # 'o'
+    Execute Command          cpu SetRegister 8 0x0A  # '\n'
+
+    Execute Command          sysbus WriteDoubleWord 0x10 0xE8A001FE  # stm r0!, {r1-r8}
+    Execute Command          cpu PC 0x10
+
+    Wait For Line On Uart    One
+    # This string should already be present, as the instruction printing it should have finished successfully
+    Wait For Line On Uart    Two  timeout=0  matchNextLine=true
+    PC Should Be Equal       0x14

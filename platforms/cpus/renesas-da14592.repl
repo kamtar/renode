@@ -74,7 +74,10 @@ uart0: UART.RenesasDA14_UART @ sysbus 0x50020000
 uart1: UART.RenesasDA14_UART @ sysbus 0x50020100
     -> nvic_m33@4
 
-wdog: Timers.RenesasDA_Watchdog @ sysbus 0x50000700
+sys_wdog: Timers.RenesasDA_Watchdog @ sysbus new Bus.BusPointRegistration {
+        address: 0x50000700;
+        cpu: cpu_m33
+    }
     frequency: 32000
     nvic: nvic_m33
 
@@ -87,9 +90,10 @@ dma: DMA.RenesasDA14_DMA @ sysbus 0x50060200
     IRQ -> nvic_m33@1
 
 i2c: I2C.RenesasDA_I2C @ sysbus 0x50020300
+    dma: dma
     -> nvic_m33@5
 
-general_regs: Miscellaneous.RenesasDA14_GeneralRegisters @ sysbus 0x50000000
+clock_gen: Miscellaneous.RenesasDA14_ClockGenerationController @ sysbus 0x50000000
     xtal32m: xtal32m_regs
     rom: rom
     eflashDataText: eflash_data_text
@@ -98,6 +102,9 @@ xtal32m_regs: Miscellaneous.RenesasDA14_XTAL32MRegisters @ sysbus 0x50010000
 
 spi: SPI.RenesasDA_SPI @ sysbus 0x50020200
     -> nvic_m33@6
+
+gp_regs: Miscellaneous.RenesasDA14_GeneralPurposeRegisters @ sysbus 0x50050300
+    sysWatchdog: sys_wdog
 
 sysbus:
     init:
@@ -120,11 +127,14 @@ sysbus:
         Tag <0x500502FC,0x500502FF> "CHIP_METAL_OPTION" 0x0
         Tag <0x50000100,0x50000163> "WAKE-UP_CONTROLLER" // WAKE_UP_CONTROLLER registers
         Tag <0x50020400,0x5002041F> "GENERAL_PURPOSE_or_ADC_1" // GENERAL_PURPOSE_or_ADC_1 registers
-        Tag <0x50050300,0x50050317> "GENERAL_PURPOSE" // GENERAL_PURPOSE registers
         Tag <0x50000200,0x5000029b> "POWER_DOMAIN_CONTROLLER" // POWER_DOMAIN_CONTROLLER registers
-        Tag <0x50020504,0x5002050F> "CLOCK_GENERATION_CONTROLLER3" // CLOCK_GENERATION_CONTROLLER3 registers
-        Tag <0x50040C04,0x50040C07> "CLOCK_GENERATION_CONTROLLER4" // CLOCK_GENERATION_CONTROLLER4 registers
-        Tag <0x50050500,0x50050503> "CLOCK_GENERATION_CONTROLLER5" // CLOCK_GENERATION_CONTROLLER5 registers
+        Tag <0x50020504,0x50020507> "CLK_COM"
+        Tag <0x50020508,0x5002050B> "SET_CLK_COM"
+        Tag <0x5002050C,0x5002050F> "RESET_CLK_COM"
+        Tag <0x50040C04,0x50040C07> "CLK_PER"
+        Tag <0x50040C08,0x50040C0B> "SET_CLK_PER"
+        Tag <0x50040C0C,0x50040C0F> "RESET_CLK_PER"
+        Tag <0x50050500,0x50050503> "CLK_SYS"
         Tag <0x1a0c0020,0x1a0c0053> "CORTEX_M33_CACHE_CONTROLLER" // CORTEX_M33_CACHE_CONTROLLER registers
         Tag <0x1a1c0020,0x1a1c0053> "CORTEX_M0+_CACHE_CONTROLLER" // CORTEX_M0+_CACHE_CONTROLLER registers
         Tag <0x50030040,0x5003004f> "AUDIO_UNIT" // AUDIO_UNIT registers

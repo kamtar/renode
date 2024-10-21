@@ -5,6 +5,8 @@
 // Full license text is available in 'licenses/MIT.txt'.
 //
 
+`timescale 1ns / 1ps
+
 package renode_pkg;
   typedef longint address_t;
   typedef longint data_t;
@@ -46,7 +48,7 @@ package renode_pkg;
 
   import "DPI-C" function bit renodeDPIIsConnected();
 
-  import "DPI-C" function void renodeDPILog(
+  import "DPI-C" function bit renodeDPILog(
     int logLevel,
     string data
   );
@@ -79,6 +81,19 @@ package renode_pkg;
     endcase
   endfunction
 
+  function static integer valid_bits_to_transaction_width(valid_bits_e valid_bits);
+    case (valid_bits)
+      QuadWord: return 64;
+      DoubleWord: return 32;
+      Word: return 16;
+      Byte: return 8;
+      default: begin
+          $error($sformatf("Cannot determine transaction width for valid_bits %d", valid_bits));
+          return 0;
+      end
+    endcase
+  endfunction
+
   class renode_connection;
     semaphore exclusive_receive = new(1);
 
@@ -88,7 +103,10 @@ package renode_pkg;
 
     function void connect(int receiver_port, int sender_port, string address);
       renodeDPIConnect(receiver_port, sender_port, address);
-      $display("Renode at %t: Connected using the socket based interface", $realtime);
+      if(is_connected())
+        $display("Renode at %t: Connected using the socket based interface", $realtime);
+      else
+        $error("Renode at %t: Connection error", $realtime);
     endfunction
 
     function bit is_connected();
@@ -117,7 +135,9 @@ package renode_pkg;
 `ifdef RENODE_DEBUG
       $display("Renode at %t logs: %s", $realtime, message);
 `endif
-      renodeDPILog(log_level, message);
+      if(!renodeDPILog(log_level, message)) begin
+        $display("Renode at %t: Unable to send the log: %s", $realtime, message);
+      end
     endfunction
 
     function void receive(output message_t message);
@@ -156,6 +176,9 @@ package renode_pkg;
     local function void handle_disconnect();
       send(message_t'{ok, 0, 0});
       disconnect();
+`ifdef RENODE_DEBUG
+      $display("Renode at %t: disconnected", $realtime);
+`endif
     endfunction
   endclass
 
@@ -178,20 +201,6 @@ package renode_pkg;
     data_t write_transaction_data;
     valid_bits_e write_transaction_data_bits;
     bit write_transaction_is_error;
-
-    renode_connection remote_connection;
-
-    function new(renode_connection remote_connection);
-      this.remote_connection = remote_connection;
-    endfunction
-
-    function void fatal_error(string message);
-      remote_connection.fatal_error(message);
-    endfunction
-
-    function void log_warning(string message);
-      remote_connection.log(LogWarning, message);
-    endfunction
 
     // Passing a class by a reference isn't supported by Verilator.
     // Events are indirectly triggered by tasks.
@@ -243,5 +252,35 @@ package renode_pkg;
       write_transaction_is_error = is_error;
       ->write_transaction_response;
     endtask
+  endclass
+
+  // It's required to pass the whole instance to modules.
+  // Passing single property triggers a null pointer dereference in Verilator.
+  class renode_runtime;
+    const string ReceiverPortArgName = "RENODE_RECEIVER_PORT";
+    const string SenderPortArgName = "RENODE_SENDER_PORT";
+    const string AddressArgName = "RENODE_ADDRESS";
+
+    renode_connection connection = new();
+    bus_connection controller = new();
+    bus_connection peripheral = new();
+
+    function void connect_plus_args();
+      int receiver_port, sender_port;
+      string address;
+      if(!$value$plusargs({ReceiverPortArgName, "=%d"}, receiver_port)
+        || !$value$plusargs({SenderPortArgName, "=%d"}, sender_port)
+        || !$value$plusargs({AddressArgName, "=%s"}, address))
+      begin
+          $error("Please specify the +%s, +%s and +%s arguments in the command that invokes the simulation", ReceiverPortArgName, SenderPortArgName, AddressArgName);
+      end
+      else begin
+        connection.connect(receiver_port, sender_port, address);
+      end
+    endfunction
+
+    function bit is_connected();
+      return connection.is_connected();
+    endfunction
   endclass
 endpackage

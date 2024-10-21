@@ -1,15 +1,15 @@
 *** Variables ***
 ${MTVEC}                            0x80080000
 
-${RV32_PRIV10}=     SEPARATOR=
-...  """                                                                ${\n}
-...  cpu: CPU.RiscV32 @ sysbus                                          ${\n}
-...  ${SPACE*4}cpuType: "rv32gcv"                                       ${\n}
-...  ${SPACE*4}privilegeArchitecture: PrivilegeArchitecture.Priv1_10    ${\n}
-...  ${SPACE*4}timeProvider: empty                                      ${\n}
-...                                                                     ${\n}
-...  dram: Memory.MappedMemory @ sysbus 0x80000000                      ${\n}
-...  ${SPACE*4}size: 0x06400000                                         ${\n}
+${RV32_PRIV10}=     SEPARATOR=${\n}
+...  """
+...  cpu: CPU.RiscV32 @ sysbus
+...  ${SPACE*4}cpuType: "rv32gcv"
+...  ${SPACE*4}privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+...  ${SPACE*4}timeProvider: empty
+...
+...  dram: Memory.MappedMemory @ sysbus 0x80000000
+...  ${SPACE*4}size: 0x06400000
 ...  """
 
 
@@ -80,7 +80,7 @@ Should Not Throw Exception After MRET in the NAPOT GRAIN32 Configuration
     Step Once And Ensure Not Trapped    ${MTVEC}
 
     # Test loads from the PMP covered region
-    Execute Command                     cpu SetRegisterUnsafe 8 0x80001000
+    Execute Command                     cpu SetRegister 8 0x80001000
     Write Opcode To  0x8000001c         0x00042483  # lw       s1, 0(s0)
     Step Once And Ensure Not Trapped    ${MTVEC}
 

@@ -85,6 +85,9 @@ Setup
           ...   Import Library  Remote  http://localhost:${PORT_NUMBER}/
     END
 
+    Setup Renode
+
+Setup Renode
     Set Default Uart Timeout  ${DEFAULT_UART_TIMEOUT}
 
     IF  ${SAVE_LOGS}
@@ -117,7 +120,7 @@ Sanitize Test Name
     ${test_name}=      Replace String  ${test_name}  ${SPACE}  _
     # double quotes because editor syntax highlighting gets confused with a single one
     ${test_name}=      Replace String Using Regexp  ${test_name}  [/""]  -
-    [return]           ${test_name}
+    RETURN             ${test_name}
 
 Create Snapshot Of Failed Test
     Return From Keyword If   'skipped' in @{TEST TAGS}
@@ -155,6 +158,16 @@ Test Setup
 Test Teardown
     Stop Profiler
 
+    ${failed}=  Run Keyword If Test Failed  Set Variable  True
+    IF  ${failed}
+        # Some of the exception messages end with whitespace.
+        ${message}=  Strip String  ${TEST_MESSAGE}  mode=right
+        Set Test Message           ${message}
+    END
+
+    ${timed_out}=  Run Keyword If Timeout Occurred  Set Variable  True
+    IF  ${timed_out}  RETURN
+
     IF  ${CREATE_SNAPSHOT_ON_FAIL}
         Run Keyword If Test Failed
           ...   Create Snapshot Of Failed Test
@@ -169,10 +182,11 @@ Test Teardown
         END
     END
 
-    ${res}=  Run Keyword And Ignore Error
-          ...    Import Library  Dialogs
-
     IF  ${HOLD_ON_ERROR}
+        ${res}=  Run Keyword If Test Failed
+        ...    Run Keyword And Ignore Error
+        ...    Import Library  Dialogs
+
         Run Keyword If Test Failed  Run Keywords
         ...         Run Keyword If    '${res[0]}' == 'FAIL'    Log                Couldn't load the Dialogs library - interactive debugging is not possible    console=True
         ...    AND  Run Keyword If    '${res[0]}' != 'FAIL'    Open GUI

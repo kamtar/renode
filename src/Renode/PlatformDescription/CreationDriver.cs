@@ -459,11 +459,9 @@ namespace Antmicro.Renode.PlatformDescription
                         var ctors = FindUsableRegistrationPoints(possibleTypes, registrationPoint);
                         if(ctors.Count == 0)
                         {
-                            // fall back to the null registration point if possible and it makes sense for the registree
-                            // (do not allow it for bus peripherals if there is a bus registration available)
+                            // fall back to the null registration point if possible
                             if(registrationPoint == null
-                                && possibleTypes.Contains(typeof(NullRegistrationPoint))
-                                && !(typeof(IBusPeripheral).IsAssignableFrom(entryType) && possibleTypes.Any(t => typeof(IBusRegistration).IsAssignableFrom(t))))
+                                && possibleTypes.Contains(typeof(NullRegistrationPoint)))
                             {
                                 usefulRegistrationPointTypes.Add(typeof(NullRegistrationPoint));
                             }
@@ -663,14 +661,14 @@ namespace Antmicro.Renode.PlatformDescription
             for(var i = 0; i < parameters.Length; i++)
             {
                 var parameter = parameters[i];
-                var attribute = attributes.SingleOrDefault(x => x.Name == parameter.Name);
+                var attribute = attributes.SingleOrDefault(x => ParameterNameMatches(x.Name, parameter, silent: true));
                 if(attribute == null)
                 {
                     FillDefaultParameter(ref parameterValues[i], parameter);
                     continue;
                 }
 
-                if(TryConvertSimpleValue(parameter.ParameterType, attribute.Value, out parameterValues[i]).ResultType == ConversionResultType.ConversionSuccessful)
+                if(TryConvertSimpleValue(parameter.ParameterType, attribute.Value, out parameterValues[i], silent: true).ResultType == ConversionResultType.ConversionSuccessful)
                 {
                     continue;
                 }
@@ -1134,7 +1132,7 @@ namespace Antmicro.Renode.PlatformDescription
 
             if(propertyInfo.GetSetMethod() == null)
             {
-                HandleError(ParsingError.PropertyNotWritable, attribute, string.Format("Property {0} does not have setter.", propertyInfo.Name), false);
+                HandleError(ParsingError.PropertyNotWritable, attribute, string.Format("Property {0} does not have a public setter.", propertyInfo.Name), false);
             }
 
             var propertyFriendlyName = string.Format("Property '{0}'", attribute.Name);
@@ -1282,7 +1280,7 @@ namespace Antmicro.Renode.PlatformDescription
             return ConversionResult.Success;
         }
 
-        private ConversionResult TryConvertSimpleValue(Type expectedType, Value value, out object result)
+        private ConversionResult TryConvertSimpleValue(Type expectedType, Value value, out object result, bool silent = false)
         {
             result = null;
 
@@ -1329,16 +1327,27 @@ namespace Antmicro.Renode.PlatformDescription
                 {
                     return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.TypeMismatch, string.Format(TypeMismatchMessage, expectedType));
                 }
-                var namespaceAndType = expectedType.Namespace.Split('.').Concat(new[] { expectedType.Name });
-                var givenReversedTypeAndNamespace = enumValue.TypeAndReversedNamespace;
 
-                // zip compares elements of the namespace from the end one by one and looks for the first difference
-                var error = givenReversedTypeAndNamespace.Zip(namespaceAndType.Reverse(), (first, second) => first != second ? Tuple.Create(first, second) : null).FirstOrDefault(x => x != null);
-                if(error != null)
+                // Compare types first as enum's type may use an alias
+                if(!TypeNameMatches(enumValue.TypeName, expectedType, silent))
                 {
                     return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
-                                                $"Enum namespace or type mismatch, expected '{error.Item2}' instead of '{error.Item1}'.");
+                                                $"Enum type mismatch, expected '{expectedType.Name}' instead of '{enumValue.TypeName}'.");
                 }
+
+                var expectedNamespace = expectedType.Namespace.Split('.');
+                var givenNamespace = enumValue.ReversedNamespace;
+
+                // Compare namespaces
+                foreach(var names in givenNamespace.Zip(expectedNamespace.Reverse(), (first, second) => Tuple.Create(first, second)))
+                {
+                    if(names.Item1 != names.Item2)
+                    {
+                        return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
+                                                    $"Enum namespace mismatch, expected '{names.Item2}' instead of '{names.Item1}'.");
+                    }
+                }
+
                 if(!SmartParser.Instance.TryParse(enumValue.Value, expectedType, out result))
                 {
                     return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
@@ -1407,7 +1416,14 @@ namespace Antmicro.Renode.PlatformDescription
 
                 foreach(var argument in ctor.GetParameters())
                 {
-                    var correspondingAttribute = attributes.SingleOrDefault(x => x.Name == argument.Name);
+                    var correspondingAttributes = attributes.Where(x => ParameterNameMatches(x.Name, argument));
+                    if(correspondingAttributes.Count() > 1)
+                    {
+                        HandleError(ParsingError.AliasedAndNormalArgumentName, responsibleObject,
+                                    "Ambiguous choice between aliased and normal argument name:" + Environment.NewLine +
+                                    String.Join(Environment.NewLine, correspondingAttributes.Select(x => x.Name + ": " + x.Value)), true);
+                    }
+                    var correspondingAttribute = correspondingAttributes.FirstOrDefault();
                     if(correspondingAttribute == null)
                     {
                         object defaultValue = null;
@@ -1526,6 +1542,36 @@ namespace Antmicro.Renode.PlatformDescription
                 value = machine;
                 return true;
             }
+            return false;
+        }
+
+        private bool ParameterNameMatches(string given, ParameterInfo info, bool silent = false)
+        {
+            return NameOrAliasMatches(given, info.Name, "parameter", info.GetCustomAttribute<NameAliasAttribute>(), silent);
+        }
+
+        private bool TypeNameMatches(string given, Type type, bool silent = false)
+        {
+            return NameOrAliasMatches(given, type.Name, "type", type.GetCustomAttribute<NameAliasAttribute>(), silent);
+        }
+
+        private bool NameOrAliasMatches(string given, string name, string typeClass, NameAliasAttribute alias, bool silent = false)
+        {
+            if(given == name)
+            {
+                return true;
+            }
+
+            if(alias != null && alias.Name == given)
+            {
+                if(!silent && alias.WarnOnUsage)
+                {
+                    Logger.Log(LogLevel.Warning, "Using alias '{0}' for {1} '{2}'", alias.Name, typeClass, name);
+                }
+
+                return true;
+            }
+
             return false;
         }
 

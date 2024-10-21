@@ -1,29 +1,49 @@
-def mc_setup_segger_rtt(name):
+#
+# Copyright (c) 2010-2024 Antmicro
+#
+# This file is licensed under the MIT License.
+# Full license text is available in 'licenses/MIT.txt'.
+#
+
+def mc_setup_segger_rtt(name, with_has_key = True, with_read = True):
+    # `mc_` is omitted as it isn't needed in the Monitor.
+    setup_arg_spec = 'setup_segger_rtt(name, with_has_key = True, with_read = True)'
     segger = monitor.Machine[name]
     bus = monitor.Machine.SystemBus
-    cpus = bus.GetCPUs()
-
-    def store_char(cpu, _):
-        segger.DisplayChar(cpu.GetRegisterUnsafe(1).RawValue)
 
     def has_key(cpu, _):
-        cpu.SetRegisterUnsafeUlong(0, 1 if segger.Contains(ord('\r')) else 0)
+        cpu.SetRegisterUlong(0, 1 if segger.Contains(ord('\r')) else 0)
         cpu.PC = cpu.LR
 
     def read(cpu, _):
-        buffer = cpu.GetRegisterUnsafe(1).RawValue
-        size = cpu.GetRegisterUnsafe(2).RawValue
+        buffer = cpu.GetRegister(1).RawValue
+        size = cpu.GetRegister(2).RawValue
         written = segger.WriteBufferToMemory(buffer, size, cpu)
-        cpu.SetRegisterUnsafeUlong(0, written)
+        cpu.SetRegisterUlong(0, written)
+        cpu.PC = cpu.LR
+
+    def write(cpu, _):
+        pointer = cpu.GetRegister(1).RawValue
+        length = cpu.GetRegister(2).RawValue
+        for i in range(length):
+            segger.DisplayChar(bus.ReadByte(pointer + i))
+
+        cpu.SetRegisterUlong(0, length)
         cpu.PC = cpu.LR
 
     def add_hook(symbol, function):
-        for cpu in cpus:
+        for cpu in bus.GetCPUs():
             try:
                 cpu.AddHook(bus.GetSymbolAddress(symbol), function)
-            except:
-                print "Failed to hook at '{}' for cpu {}".format(symbol, cpu.GetName())
+            except Exception as e:
+                cpu.WarningLog("Failed to add hook at '{}': {}".format(symbol, e))
+                cpu.WarningLog("Make sure the binary is loaded before calling setup_segger_rtt")
+                if function == has_key or function == read:
+                    cpu.WarningLog("Adding this hook can be omitted by passing False to the optional 'with_{}' argument:\n{}"
+                                  .format(function.__name__, setup_arg_spec))
 
-    add_hook("_StoreChar", store_char)
-    add_hook("SEGGER_RTT_HasKey", has_key)
-    add_hook("SEGGER_RTT_Read", read)
+    if with_has_key:
+        add_hook("SEGGER_RTT_HasKey", has_key)
+    if with_read:
+        add_hook("SEGGER_RTT_ReadNoLock", read)
+    add_hook("SEGGER_RTT_WriteNoLock", write)
