@@ -26,6 +26,8 @@ CUSTOM_PROP=
 NET_FRAMEWORK_VER=
 RID="linux-x64"
 HOST_ARCH="i386"
+# Common cmake flags
+CMAKE_COMMON=""
 
 function print_help() {
   echo "Usage: $0 [-cdvspnt] [-b properties-file.csproj] [--no-gui] [--skip-fetch] [--profile-build] [--tlib-only] [--tlib-export-compile-commands] [--tlib-arch <arch>] [--host-arch i386|aarch64] [-- <ARGS>]"
@@ -44,7 +46,7 @@ function print_help() {
   echo "--force-net-framework-version     build against different version of .NET Framework than specified in the solution"
   echo "--net                             build with dotnet"
   echo "-B                                bundle target runtime (default value: $RID, requires --net, -t)"
-  echo "--profile-build                   build optimized for tlib profiling"
+  echo "--profile-build                   build optimized for profiling"
   echo "--tlib-only                       only build tlib"
   echo "--tlib-arch                       build only single arch (implies --tlib-only)"
   echo "--tlib-export-compile-commands    build tlibs with 'complile_commands.json' (requires --tlib-arch)"
@@ -106,7 +108,7 @@ do
           PARAMS+=(p:NET=true)
           ;;
         "profile-build")
-          PARAMS+=('p:TlibProfilingBuild=true')
+          CMAKE_COMMON="-DPROFILING_BUILD=ON"
           ;;
         "tlib-only")
           TLIB_ONLY=true
@@ -213,16 +215,20 @@ elif $ON_WINDOWS
 then
     BUILD_TARGET=Windows
     TFM="net6.0-windows10.0.17763.0"
+    RID="win-x64"
 else
     BUILD_TARGET=Mono
 fi
 
 if $NET
 then
-  CS_COMPILER="dotnet build"
+  export DOTNET_CLI_TELEMETRY_OPTOUT=1
+  CS_COMPILER="dotnet build -f $TFM"
   TARGET="`get_path \"$PWD/Renode_NET.sln\"`"
+  OUT_BIN_DIR=output/bin/$CONFIGURATION/$TFM
 else
   TARGET="`get_path \"$PWD/Renode.sln\"`"
+  OUT_BIN_DIR=output/bin/$CONFIGURATION
 fi
 
 # Verify Mono and mcs version on Linux and macOS
@@ -280,7 +286,7 @@ then
       do
         if $NET
         then
-            dotnet clean $(build_args_helper ${PARAMS[@]}) $(build_args_helper p:Configuration=${conf}${build_target}) "$TARGET"
+            dotnet clean -f $TFM $(build_args_helper ${PARAMS[@]}) $(build_args_helper p:Configuration=${conf}${build_target}) "$TARGET"
         else
             $CS_COMPILER $(build_args_helper ${PARAMS[@]}) $(build_args_helper p:Configuration=${conf}${build_target}) "$TARGET"
         fi
@@ -302,12 +308,21 @@ PARAMS+=(p:Configuration=${CONFIGURATION}${BUILD_TARGET} p:GenerateFullPaths=tru
 CORES_BUILD_PATH="$CORES_PATH/obj/$CONFIGURATION"
 CORES_BIN_PATH="$CORES_PATH/bin/$CONFIGURATION"
 
-# Common cmake flags
+# Cmake generator, handled in their own variable since the names contain spaces
 if $ON_WINDOWS
 then
-    CMAKE_COMMON="-GMinGW Makefiles"
+    CMAKE_GEN="-GMinGW Makefiles"
 else
-    CMAKE_COMMON="-GUnix Makefiles"
+    CMAKE_GEN="-GUnix Makefiles"
+fi
+
+# Macos architecture flags, to make rosetta work properly
+if $ON_OSX
+then
+  CMAKE_COMMON+=" -DCMAKE_OSX_ARCHITECTURES=x86_64"
+  if [ $HOST_ARCH == "aarch64" ]; then
+    CMAKE_COMMON+=" -DCMAKE_OSX_ARCHITECTURES=arm64"
+  fi
 fi
 
 # This list contains all cores that will be built.
@@ -352,15 +367,15 @@ do
     if [[ "$TLIB_EXPORT_COMPILE_COMMANDS" = true ]]; then
         CMAKE_CONF_FLAGS+=" -DCMAKE_EXPORT_COMPILE_COMMANDS=1"
     fi
-    cmake "$CMAKE_COMMON" $CMAKE_CONF_FLAGS -DHOST_ARCH=$HOST_ARCH $CORES_PATH
+    cmake "$CMAKE_GEN" $CMAKE_COMMON $CMAKE_CONF_FLAGS -DHOST_ARCH=$HOST_ARCH $CORES_PATH
     cmake --build . -j$(nproc)
     CORE_BIN_DIR=$CORES_BIN_PATH/lib
     mkdir -p $CORE_BIN_DIR
     if $ON_OSX; then
         # macos `cp` does not have the -u flag
-        cp -v *.so $CORE_BIN_DIR/
+        cp -v tlib/*.so $CORE_BIN_DIR/
     else
-        cp -u -v *.so $CORE_BIN_DIR/
+        cp -u -v tlib/*.so $CORE_BIN_DIR/
     fi
     # copy compile_commands.json to tlib directory
     if [[ "$TLIB_EXPORT_COMPILE_COMMANDS" = true ]]; then
@@ -378,12 +393,19 @@ fi
 eval "$CS_COMPILER $(build_args_helper "${PARAMS[@]}") $TARGET"
 
 # copy llvm library
-if $NET
-then
-  cp src/Infrastructure/src/Emulator/Peripherals/bin/$CONFIGURATION/$TFM/libllvm-disas.* output/bin/$CONFIGURATION/$TFM
-else
-  cp src/Infrastructure/src/Emulator/Peripherals/bin/$CONFIGURATION/libllvm-disas.* output/bin/$CONFIGURATION
+LLVM_LIB="libllvm-disas"
+if [[ $HOST_ARCH == "aarch64" ]]; then
+  # aarch64 host binaries have a different name
+  LLVM_LIB="libllvm-disas-aarch64"
 fi
+if [[ "${DETECTED_OS}" == "windows" ]]; then
+  LIB_EXT="dll"
+elif [[ "${DETECTED_OS}" == "osx" ]]; then
+  LIB_EXT="dylib"
+else
+  LIB_EXT="so"
+fi
+cp lib/resources/llvm/$LLVM_LIB.$LIB_EXT $OUT_BIN_DIR/libllvm-disas.$LIB_EXT
 
 # build packages after successful compilation
 params=""
@@ -414,15 +436,29 @@ if $PACKAGES
 then
     if $NET
     then
-        # Restore dependecies for linux-x64 runtime. It prevents error NETSDK1112 during publish.
-        dotnet restore --runtime linux-x64 Renode_NET.sln
+        # dotnet package on linux uses a seperate script
+        if $ON_LINUX
+        then
+            # Restore dependecies for linux-x64 runtime. It prevents error NETSDK1112 during publish.
+            dotnet restore --runtime linux-x64 Renode_NET.sln
 
-        eval "dotnet publish -f $TFM --self-contained false $(build_args_helper "${PARAMS[@]}") $TARGET"
-        export RID TFM
-        $ROOT_PATH/tools/packaging/make_linux_dotnet_package.sh $params
-        # Source package bundles nuget dependencies required for building the dotnet version of Renode
-        # so it can only be built when using dotnet. The generated package can also be used with Mono/.NETFramework
-        $ROOT_PATH/tools/packaging/make_source_package.sh $params
+            # maxcpucount:1 to avoid an error with multithreaded publish
+            eval "dotnet publish -maxcpucount:1 -f $TFM --self-contained false $(build_args_helper "${PARAMS[@]}") $TARGET"
+            export RID TFM
+            $ROOT_PATH/tools/packaging/make_linux_dotnet_package.sh $params
+            # Source package bundles nuget dependencies required for building the dotnet version of Renode
+            # so it can only be built when using dotnet. The generated package can also be used with Mono/.NETFramework
+            $ROOT_PATH/tools/packaging/make_source_package.sh $params
+        elif $ON_WINDOWS && ! $PORTABLE
+        then
+            # No Non portable dotnet package on windows yet
+            echo "Only portable dotnet packages are supported on windows. Rerun build.sh with -t flag to build portable"
+            exit 1
+        elif $ON_OSX
+        then
+            echo "dotnet packages not supported on ${DETECTED_OS}"
+            exit 1
+        fi
     else
         $ROOT_PATH/tools/packaging/make_${DETECTED_OS}_packages.sh $params
     fi
@@ -431,18 +467,20 @@ fi
 if $PORTABLE
 then
     PARAMS+=(p:PORTABLE=true)
-    if $ON_LINUX
+    if $NET
     then
-      if $NET
-      then
-          eval "dotnet publish -r $RID -f $TFM --self-contained true $(build_args_helper "${PARAMS[@]}") $TARGET"
-          export RID TFM
-          $ROOT_PATH/tools/packaging/make_linux_portable_dotnet.sh $params
-      else
-          $ROOT_PATH/tools/packaging/make_linux_portable.sh $params
-      fi
+        dotnet restore --runtime $RID Renode_NET.sln
+        # maxcpucount:1 to avoid an error with multithreaded publish
+        eval "dotnet publish -maxcpucount:1 -r $RID -f $TFM --self-contained true $(build_args_helper "${PARAMS[@]}") $TARGET"
+        export RID TFM
+        $ROOT_PATH/tools/packaging/make_${DETECTED_OS}_portable_dotnet.sh $params
     else
-      echo "Portable packages are only available on Linux. Exiting!"
-      exit 1
+        if $ON_LINUX
+        then
+            $ROOT_PATH/tools/packaging/make_linux_portable.sh $params
+        else
+            echo "Portable packages for Mono are only available on Linux. Exiting!"
+            exit 1
+        fi
     fi
 fi
