@@ -123,13 +123,15 @@ namespace Antmicro.Renode.Peripherals.SystemC
                 IMachine machine,
                 string address,
                 int port,
-                int timeSyncPeriodUS = 1000
+                int timeSyncPeriodUS = 1000,
+                bool disableTimeoutCheck = false
         )
         {
             this.address = address;
             this.port = port;
             this.machine = machine;
             this.timeSyncPeriodUS = timeSyncPeriodUS;
+            this.disableTimeoutCheck = disableTimeoutCheck;
             sysbus = machine.GetSystemBus(this);
 
             directAccessPeripherals = new Dictionary<int, IDirectAccessPeripheral>();
@@ -325,7 +327,11 @@ namespace Antmicro.Renode.Peripherals.SystemC
             this.Log(LogLevel.Info, "SystemCPeripheral waiting for forward SystemC connection on {0}:{1}", address, port);
             forwardSocket = listener.Accept();
             forwardSocket.SendTimeout = 1000;
-            forwardSocket.ReceiveTimeout = 1000;
+            // No ReceiveTimeout for forwardSocket if the disableTimeoutCheck constructor argument is set - so if a debugger halts the SystemC process, Renode will wait for the process to restart
+            if(!disableTimeoutCheck)
+            {
+                forwardSocket.ReceiveTimeout = 1000;
+            }
 
             backwardSocket = listener.Accept();
             backwardSocket.SendTimeout = 1000;
@@ -338,17 +344,32 @@ namespace Antmicro.Renode.Peripherals.SystemC
 
         private void SetupTimesync()
         {
-            // NOTE: This function blocks simulation while awaiting for the response.
-
             // Timer unit is microseconds
+            var timerName = "RenodeSystemCTimesyncTimer";
             var timesyncFrequency = 1000000;
             var timesyncLimit = (ulong)timeSyncPeriodUS;
-            var timerName = "RenodeSystemCTimesyncTimer";
-            var timer = new LimitTimer(machine.ClockSource, timesyncFrequency, this, timerName, limit: timesyncLimit, enabled: true, eventEnabled: true, autoUpdate: true);
-            timer.LimitReached += () =>
+
+            var timesyncTimer = new LimitTimer(machine.ClockSource, timesyncFrequency, this, timerName, limit: timesyncLimit, enabled: true, eventEnabled: true, autoUpdate: true);
+
+            Action<TimeInterval, TimeInterval> adjustTimesyncToQuantum = ((_, newQuantum) => {
+                if(TimeInterval.FromMicroseconds(timesyncTimer.Limit) < newQuantum)
+                {
+                    var newLimit = (ulong)newQuantum.TotalMicroseconds;
+                    this.Log(LogLevel.Warning, $"Requested time synchronization period of {timesyncTimer.Limit}us is smaller than local time source quantum - synchronization time will be changed to {newLimit}us to match it.");
+                    timesyncTimer.Limit = newLimit;
+                }
+            });
+            var currentQuantum = machine.LocalTimeSource.Quantum;
+            adjustTimesyncToQuantum(currentQuantum, currentQuantum);
+            machine.LocalTimeSource.QuantumChanged += adjustTimesyncToQuantum;
+
+            timesyncTimer.LimitReached += () =>
             {
-                var request = new RenodeMessage(RenodeAction.Timesync, 0, 0, 0, GetCurrentVirtualTimeUS());
-                SendRequest(request);
+                machine.LocalTimeSource.ExecuteInNearestSyncedState(_ =>
+                {
+                    var request = new RenodeMessage(RenodeAction.Timesync, 0, 0, 0, GetCurrentVirtualTimeUS());
+                    SendRequest(request);
+                });
             };
         }
 
@@ -492,6 +513,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
         private readonly string address;
         private readonly int port;
         private readonly int timeSyncPeriodUS;
+        private readonly bool disableTimeoutCheck;
         private readonly object messageLock;
 
         private readonly Thread backwardThread;

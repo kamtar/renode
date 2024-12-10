@@ -16,9 +16,9 @@ using Antmicro.Renode.Plugins.CoSimulationPlugin.Connection.Protocols;
 
 namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
 {
-    public class LibraryCoSimulationConnection: ICoSimulationConnection, IEmulationElement
+    public class LibraryConnection: ICoSimulationConnection, IEmulationElement
     {
-        public LibraryCoSimulationConnection(IEmulationElement parentElement, int timeout, Action<ProtocolMessage> receiveAction)
+        public LibraryConnection(IEmulationElement parentElement, int timeout, Action<ProtocolMessage> receiveAction)
         {
             this.parentElement = parentElement;
             this.timeout = timeout;
@@ -35,7 +35,9 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
             Abort();
             binder?.Dispose();
             Marshal.FreeHGlobal(mainResponsePointer);
+            mainResponsePointer = IntPtr.Zero;
             Marshal.FreeHGlobal(senderResponsePointer);
+            senderResponsePointer = IntPtr.Zero;
         }
 
         public bool TrySendMessage(ProtocolMessage message)
