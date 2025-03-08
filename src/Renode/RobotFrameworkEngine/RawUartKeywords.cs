@@ -39,6 +39,14 @@ namespace Antmicro.Renode.RobotFramework
         }
 
         [RobotFrameworkKeyword]
+        public string UartReadNumberOfBytesAsHexWithTimeout(uint count, uint timeout, int? testerId = null)
+        {
+            byte[] bytes = GetTesterOrThrowException(testerId).ReadNumBytes(count, timeout);
+            return BitConverter.ToString(bytes).Replace("-", " ");
+        }
+
+
+        [RobotFrameworkKeyword]
         public string UartReadBytesAsHexUntilTimeout(uint timeout, int? testerId = null)
         {
             byte[] bytes = GetTesterOrThrowException(testerId).ReadBytesFor(timeout);

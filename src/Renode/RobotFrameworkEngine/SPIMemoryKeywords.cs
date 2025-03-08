@@ -19,13 +19,6 @@ namespace Antmicro.Renode.RobotFramework
             return CreateNewTester(spiMemoryObject => new SPIMemoryTester(spiMemoryObject), spiMemory, machine);
         }
 
-        /// <summary>
-        /// Read data from SPI memory and return it as a hex string.
-        /// </summary>
-        /// <param name="address">rr</param>
-        /// <param name="count">rr</param>
-        /// <param name="testerId">rr</param>
-        /// <returns></returns>
         [RobotFrameworkKeyword]
         public string ReadSPIMemoryAsHex(int address, int count, int? testerId = null)
         {   //return hex string compatible with robot framework
