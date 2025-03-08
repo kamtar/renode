@@ -1,9 +1,9 @@
 *** Variables ***
 ${URI}                          @https://dl.antmicro.com/projects/renode
 ${UART}                         sysbus.uart
-${CPU_IBEX_NATIVE_LINUX}        ${URI}/libVcpu_ibex-Linux-x86_64-12746432362.so-s_2224440-fb03313c1ba631156fcbbb5593a4f66e4c5fe459
-${CPU_IBEX_NATIVE_WINDOWS}      ${URI}/libVcpu_ibex-Windows-x86_64-12746432362.dll-s_3401444-3e4e24fdc95d7436b490c95285169b3748ed2b76
-${CPU_IBEX_NATIVE_MACOS}        ${URI}/libVcpu_ibex-macOS-x86_64-12746432362.dylib-s_316064-ca204a33af0e742a326cf3cc407608caed5b225e
+${CPU_IBEX_NATIVE_LINUX}        ${URI}/libVcpu_ibex-Linux-x86_64-13112907851.so-s_2251128-ab2dcb1801188d7f934bdeafa93f9c1edc60ad39
+${CPU_IBEX_NATIVE_WINDOWS}      ${URI}/libVcpu_ibex-Windows-x86_64-13112907851.dll-s_3426669-58d11ffc81ea755c1d1151e6b33fc13164bb13d5
+${CPU_IBEX_NATIVE_MACOS}        ${URI}/libVcpu_ibex-macOS-x86_64-13112907851.dylib-s_336528-7677f09f18bfb2937ad2bffdd63ed7d76bb15d56
 
 *** Keywords ***
 Create Machine

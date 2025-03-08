@@ -183,3 +183,8 @@
 - tests/platforms/systemc/multiple-peripherals/multiple-peripherals.robot
 - tests/platforms/systemc/transaction-delay/transaction-delay.robot
 - tests/platforms/systemc/test-synchronization/synchronization.robot
+- tests/unit-tests/instructions-counting.robot
+- tests/unit-tests/timer-reconfiguration.robot
+- tests/platforms/S32K388.robot
+- tests/unit-tests/bus-isolation.robot
+- tests/unit-tests/bus-performance.robot
