@@ -30,7 +30,7 @@ namespace Antmicro.Renode.PlatformDescription
 {
     using DependencyGraph = Dictionary<Entry, Dictionary<Entry, ReferenceValue>>;
 
-    public sealed class CreationDriver
+    public sealed partial class CreationDriver
     {
         public CreationDriver(Machine machine, IUsingResolver usingResolver, IInitHandler initHandler)
         {
@@ -43,6 +43,7 @@ namespace Antmicro.Renode.PlatformDescription
             objectValueInitQueue = new Queue<ObjectValue>();
             usingsBeingProcessed = new Stack<string>();
             irqCombiners = new Dictionary<IrqDestination, IrqCombinerConnection>();
+            createdDisposables = new List<IDisposable>();
             PrepareVariables();
         }
 
@@ -62,15 +63,95 @@ namespace Antmicro.Renode.PlatformDescription
             ProcessInner(path, source);
         }
 
+        private void ProcessVariableDeclarations(Description description, string prefix)
+        {
+            // Collect all variable declarations (entries where there is a type specified).
+            // These can be anywhere in the usings hierarchy, as long as there is only one.
+            var entries = description.Entries;
+            foreach(var entry in entries)
+            {
+                if(entry.Type != null)
+                {
+                    var wasDeclared = variableStore.TryGetVariableInLocalScope(entry.VariableName, out var variable);
+                    if(!wasDeclared)
+                    {
+                        var resolved = ResolveTypeOrThrow(entry.Type, entry.Type);
+                        variable = variableStore.DeclareVariable(entry.VariableName, resolved, entry.StartPosition, entry.IsLocal);
+                    }
+                    else
+                    {
+                        HandleDoubleDeclarationError(variable, entry);
+                    }
+                }
+            }
+        }
+
+        private void CollectVariableEntries(Description description, string prefix)
+        {
+            // Having collected all variable declarations, go through the entries again and collect them in the correct
+            // order for merging later.
+            // At this point we can also validate if there were declaration errors (e. g. variable without type).
+            var entries = description.Entries;
+
+            foreach(var entry in entries)
+            {
+                if(!entry.Attributes.Any() && entry.RegistrationInfos == null && entry.Type == null)
+                {
+                    HandleError(ParsingError.EmptyEntry, entry, "Entry cannot be empty.", false);
+                }
+
+                var wasDeclared = variableStore.TryGetVariableInLocalScope(entry.VariableName, out var variable);
+                if(!wasDeclared)
+                {
+                    HandleError(ParsingError.VariableNeverDeclared, entry,
+                                    string.Format("Variable '{0}' is never declared - type is unknown.", entry.VariableName), false);
+                }
+
+                if(entry.Type == null)
+                {
+                    var updatingCtorAttribute = entry.Attributes.OfType<ConstructorOrPropertyAttribute>().FirstOrDefault(x => !x.IsPropertyAttribute);
+                    if(updatingCtorAttribute != null)
+                    {
+                        var position = GetFormattedPosition(updatingCtorAttribute);
+                        Logger.Log(LogLevel.Debug, "At {0}: updating constructors of the entry declared earlier.", position);
+                    }
+                }
+
+                variable.AddEntry(entry);
+            }
+
+            foreach(var entry in entries)
+            {
+                ProcessEntryPreMerge(entry);
+            }
+        }
+
+        private void HandleDoubleDeclarationError(Variable variable, Entry entry)
+        {
+            string restOfErrorMessage;
+            if(variable.DeclarationPlace != DeclarationPlace.BuiltinOrAlreadyRegistered)
+            {
+                restOfErrorMessage = string.Format(", previous declaration was {0}", variable.DeclarationPlace.GetFriendlyDescription());
+            }
+            else
+            {
+                restOfErrorMessage = " as an already registered peripheral or builtin";
+            }
+            HandleError(ParsingError.VariableAlreadyDeclared, entry,
+                        string.Format("Variable '{0}' was already declared{1}.", entry.VariableName, restOfErrorMessage), false);
+        }
+
         private void ProcessInner(string file, string source)
         {
             try
             {
-                ValidatePreMerge(file, source, "");
+                var usingsGraph = new UsingsGraph(this, file, source);
+                usingsGraph.TraverseDepthFirst(ProcessVariableDeclarations);
+                usingsGraph.TraverseDepthFirst(CollectVariableEntries);
                 var mergedEntries = variableStore.GetMergedEntries();
                 foreach(var entry in mergedEntries)
                 {
-                    ValidateEntryPostMerge(entry);
+                    ProcessEntryPostMerge(entry);
                 }
 
                 var sortedForCreation = SortEntriesForCreation(mergedEntries);
@@ -138,30 +219,10 @@ namespace Antmicro.Renode.PlatformDescription
                 objectValueInitQueue.Clear();
                 usingsBeingProcessed.Clear();
                 irqCombiners.Clear();
+                createdDisposables.Clear();
                 PrepareVariables();
             }
             machine.PostCreationActions();
-        }
-
-        private void ValidatePreMerge(string file, string source, string prefix)
-        {
-            var parsedDescription = ParseDescription(source, file);
-            processedDescriptions.Add(parsedDescription);
-
-            foreach(var usingEntry in parsedDescription.Usings)
-            {
-                ProcessUsing(usingEntry, prefix, file);
-            }
-
-            variableStore.CurrentScope = file;
-            var currentEntries = parsedDescription.Entries.ToList();
-
-            if(!string.IsNullOrEmpty(prefix))
-            {
-                SyntaxTreeHelpers.VisitSyntaxTree<IPrefixable>(parsedDescription, x => x.Prefix(prefix));
-            }
-            SyntaxTreeHelpers.VisitSyntaxTree<ReferenceValue>(parsedDescription, x => x.Scope = file);
-			ValidateEntriesPreMerge(currentEntries);
         }
 
         private Description ParseDescription(string description, string fileName)
@@ -192,36 +253,6 @@ namespace Antmicro.Renode.PlatformDescription
             {
                 variableStore.AddBuiltinOrAlreadyRegisteredVariable(peripheral.Value, peripheral.Key);
             }
-        }
-
-        private void ProcessUsing(UsingEntry usingEntry, string parentPrefix, string includingFile)
-        {
-            var filePath = usingResolver.Resolve(usingEntry.Path, includingFile);
-            if(!File.Exists(filePath))
-            {
-                HandleError(ParsingError.UsingFileNotFound, usingEntry.Path,
-                            string.Format("Using '{0}' resolved as '{1}' does not exist.", usingEntry.Path, filePath), true);
-            }
-            var fullFilePath = Path.GetFullPath(filePath);
-            if(usingsBeingProcessed.Contains(fullFilePath))
-            {
-                var segments = new List<string> { fullFilePath };
-                string currentSegment;
-                do
-                {
-                    currentSegment = usingsBeingProcessed.Pop();
-                    segments.Add(currentSegment);
-                } while(currentSegment != fullFilePath);
-
-                HandleError(ParsingError.RecurringUsing, usingEntry,
-                            string.Format("There is a cycle in using file depenedncy. The path is as follows: {0}.",
-                                          Environment.NewLine + segments.Aggregate((x, y) => x + Environment.NewLine + "=> " + y)),
-                            false);
-            }
-            usingsBeingProcessed.Push(fullFilePath);
-            var source = File.ReadAllText(filePath);
-            ValidatePreMerge(filePath, source, parentPrefix + usingEntry.Prefix);
-            usingsBeingProcessed.Pop();
         }
 
         private List<Entry> SortEntriesForCreation(IEnumerable<Entry> entries)
@@ -357,65 +388,7 @@ namespace Antmicro.Renode.PlatformDescription
             return result;
         }
 
-        private void ValidateEntriesPreMerge(List<Entry> entries)
-        {
-            foreach(var entry in entries)
-            {
-                Variable variable;
-
-                if(!entry.Attributes.Any() && entry.RegistrationInfos == null && entry.Type == null)
-                {
-                    HandleError(ParsingError.EmptyEntry, entry, "Entry cannot be empty.", false);
-                }
-
-                var wasDeclared = variableStore.TryGetVariableInLocalScope(entry.VariableName, out variable);
-                if(entry.Type == null)
-                {
-                    if(!wasDeclared)
-                    {
-                        HandleError(ParsingError.TypeNotSpecifiedInFirstVariableUse, entry,
-                                    string.Format("First entry for variable '{0}' file does not contain a type name.", entry.VariableName), false);
-                    }
-                }
-                else
-                {
-                    if(wasDeclared)
-                    {
-                        string restOfErrorMessage;
-                        if(variable.DeclarationPlace != DeclarationPlace.BuiltinOrAlreadyRegistered)
-                        {
-                            restOfErrorMessage = string.Format(", previous declaration was {0}", variable.DeclarationPlace.GetFriendlyDescription());
-                        }
-                        else
-                        {
-                            restOfErrorMessage = " as an already registered peripheral or builtin";
-                        }
-                        HandleError(ParsingError.VariableAlreadyDeclared, entry,
-                                    string.Format("Variable '{0}' was already defined{1}.", entry.VariableName, restOfErrorMessage), false);
-                    }
-                    var resolved = ResolveTypeOrThrow(entry.Type, entry.Type);
-                    variable = variableStore.DeclareVariable(entry.VariableName, resolved, entry.StartPosition, entry.IsLocal);
-                }
-
-                variable.AddEntry(entry);
-                if(entry.Type == null)
-                {
-                    var updatingCtorAttribute = entry.Attributes.OfType<ConstructorOrPropertyAttribute>().FirstOrDefault(x => !x.IsPropertyAttribute);
-                    if(updatingCtorAttribute != null)
-                    {
-                        var position = GetFormattedPosition(updatingCtorAttribute);
-                        Logger.Log(LogLevel.Debug, "At {0}: updating constructors of the entry declared earlier.", position);
-                    }
-                }
-            }
-
-            foreach(var entry in entries)
-            {
-                ValidateEntryPreMerge(entry);
-            }
-        }
-
-        private void ValidateEntryPreMerge(Entry entry)
+        private void ProcessEntryPreMerge(Entry entry)
         {
             var entryType = variableStore.GetVariableInLocalScope(entry.VariableName).VariableType;
             if(entry.Alias != null)
@@ -567,7 +540,7 @@ namespace Antmicro.Renode.PlatformDescription
             return true;
         }
 
-        private void ValidateEntryPostMerge(Entry entry)
+        private void ProcessEntryPostMerge(Entry entry)
         {
             // we have to find a constructor for this entry - if it is to be constructed (e.g. sysbus entry is not)
             // we also have to find constructors for all of the object values within this entry
@@ -661,6 +634,10 @@ namespace Antmicro.Renode.PlatformDescription
                 }
                 var message = string.Format("Exception was thrown during construction of {0}:{1}{2}", friendlyName, Environment.NewLine, exceptionMessage);
                 HandleError(ParsingError.ConstructionException, responsibleSyntaxElement, message, false);
+            }
+            if(result is IDisposable disposable)
+            {
+                createdDisposables.Add(disposable);
             }
             return result;
         }
@@ -832,6 +809,11 @@ namespace Antmicro.Renode.PlatformDescription
                     }
                     else
                     {
+                        // any manual irq connection should remove all automatic connections
+                        if (objectToSetOn is IHasAutomaticallyConnectedGPIOOutputs objectWithAutomaticConnections)
+                        {
+                            objectWithAutomaticConnections.DisconnectAutomaticallyConnectedGPIOOutputs();
+                        }
                         var connections = ((INumberedGPIOOutput)objectToSetOn).Connections;
                         if(!connections.ContainsKey(irqEnd.Number))
                         {
@@ -1037,10 +1019,22 @@ namespace Antmicro.Renode.PlatformDescription
                     foreach(var registrationPoint in registrationPoints)
                     {
                         registrationInfo.RegistrationInterface.GetMethod("Register").Invoke(register, new[] { entry.Variable.Value, registrationPoint });
+                        // Remove this entry from the list of dangling disposables if it was registered. This has to be done before
+                        // HandleError, so it is not disposed if for example registering at the second point throws.
+                        if(entry.Variable.Value is IDisposable disposable)
+                        {
+                            createdDisposables.Remove(disposable);
+                        }
                     }
                 }
                 catch(TargetInvocationException exception)
                 {
+                    // If this is a bus peripheral, its constructor might have called GetSystemBus(this), which leaves a
+                    // reference to the peripheral even if it fails to get registered. Clean up this reference.
+                    if(entry.Variable.Value is IBusPeripheral busPeripheral)
+                    {
+                        machine.TryRemoveBusController(busPeripheral);
+                    }
                     var recoverableException = exception.InnerException as RecoverableException;
                     if(recoverableException == null)
                     {
@@ -1682,6 +1676,12 @@ namespace Antmicro.Renode.PlatformDescription
 
         private void HandleError(ParsingError error, IWithPosition failingObject, string message, bool longMark)
         {
+            for(int i = createdDisposables.Count - 1; i >= 0; --i)
+            {
+                createdDisposables[i].Dispose();
+            }
+            createdDisposables.Clear();
+
             string source, fileName;
             if(!GetElementSourceAndPath(failingObject, out fileName, out source))
             {
@@ -1791,6 +1791,7 @@ namespace Antmicro.Renode.PlatformDescription
         private readonly Queue<ObjectValue> objectValueInitQueue;
         private readonly Stack<string> usingsBeingProcessed;
         private readonly Dictionary<IrqDestination, IrqCombinerConnection> irqCombiners;
+        private readonly List<IDisposable> createdDisposables;
 
         private static readonly HashSet<Type> NumericTypes = new HashSet<Type>(new []
         {

@@ -6,6 +6,7 @@ import signal
 import psutil
 import subprocess
 from time import monotonic
+from typing import Dict, List
 
 import xml.etree.ElementTree as ET
 import glob
@@ -143,6 +144,10 @@ class NUnitTestSuite(object):
             process = subprocess.Popen(args)
             print('dotnet test runner PID is {}'.format(process.pid), flush=True)
         else:
+            if platform != "win32":
+                # This is alias for '--process=Single' - means no TCP connection at all so that we can see what happens underneath
+                # This causes failure on some Windows setups
+                args.append("--inprocess")
             process = subprocess.Popen(args, cwd=options.results_directory)
             print('NUnit3 runner PID is {}'.format(process.pid), flush=True)
 
@@ -162,6 +167,12 @@ class NUnitTestSuite(object):
 
 
     def should_retry_suite(self, options, iteration_index, suite_retry_index):
+        # Unused mechanism, this exists to keep a uniform interface with
+        # robot_tests_provider.py.
+        return False
+
+
+    def tests_failed_due_to_renode_crash(self) -> bool:
         # Unused mechanism, this exists to keep a uniform interface with
         # robot_tests_provider.py.
         return False

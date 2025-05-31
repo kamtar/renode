@@ -1,17 +1,16 @@
 from time import sleep
 from Antmicro import Renode
 
-current_value = 0
-
-def mc_uart_connect(device_name):
+def mc_uart_connect(device):
     def __printer(b):
         sys.stdout.write(chr(b))
 
     uart = None
+    device_name = device.GetName()
     try:
-        uart = clr.Convert(self.Machine[str(device_name)], Renode.Peripherals.UART.IUART)
+        uart = clr.Convert(device, Renode.Peripherals.UART.IUART)
     except:
-        print("Peripheral %s not found or not an IUART." % device_name)
+        print("Peripheral %s is not an IUART." % device_name)
         return 1
 
     print("Redirecting the input to %s, press <ESC> to quit..." % device_name)
@@ -25,9 +24,10 @@ def mc_uart_connect(device_name):
     print("Disconnected from %s" % device_name)
 
 def mc_next_value(offset = 0):
-    global current_value
-    print "%d" % (current_value + offset)
-    current_value = current_value + 1
+    print "%d" % (mc_next_value.current_value + offset)
+    mc_next_value.current_value = mc_next_value.current_value + 1
+
+mc_next_value.current_value = 0
 
 def mc_sleep(time):
     sleep(float(time))

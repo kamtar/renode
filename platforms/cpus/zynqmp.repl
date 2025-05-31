@@ -63,11 +63,8 @@ apuGic: IRQControllers.ARM_GenericInterruptController @ {
         sysbus new Bus.BusMultiRegistration { address: 0xf9010000; size: 0x010000; region: "distributor" };
         sysbus new Bus.BusMultiRegistration { address: 0xf9020000; size: 0x010000; region: "cpuInterface" }
     }
-    [0-3] -> apu0@[0-3]
-    [4-7] -> apu1@[0-3]
-    [8-11]  -> apu2@[0-3]
-    [12-15] -> apu3@[0-3]
     architectureVersion: IRQControllers.ARM_GenericInterruptControllerVersion.GICv2
+    // GIC -> ARM CPU interrupt connections are generated automatically
 
 // RPU
 
@@ -97,9 +94,8 @@ rpuGic: IRQControllers.ARM_GenericInterruptController @ {
         sysbus new Bus.BusMultiRegistration { address: 0xf9000000; size: 0x1000; region: "distributor" };
         sysbus new Bus.BusMultiRegistration { address: 0xf9001000; size: 0x100; region: "cpuInterface" }
     }
-    [0-1] -> rpu0@[0-1]
-    [4-5] -> rpu1@[0-1]
     architectureVersion: IRQControllers.ARM_GenericInterruptControllerVersion.GICv1
+    // GIC -> ARM CPU interrupt connections are generated automatically
 
 // MEMORY
 
@@ -192,6 +188,15 @@ gem2: Network.CadenceGEM @ sysbus 0xff0d0000
 gem3: Network.CadenceGEM @ sysbus 0xff0e0000
     -> apuGic@63 | rpuGic@63
 
+phy: Network.EthernetPhysicalLayer @ gem0 0
+    BasicStatus: 0x62A4
+    Id1: 0x0141
+    Id2: 0x0e40
+    AutoNegotiationAdvertisement: 0x1e1
+    AutoNegotiationLinkPartnerBasePageAbility: 0x1e1
+    MasterSlaveControl: 0x300
+    MasterSlaveStatus: 0x3000
+
 gpio: GPIOPort.XilinxGPIOPS @ sysbus <0xff0a0000, +0x1000>
     numberOfGpioBanks: 6
 
@@ -204,6 +209,10 @@ ipi: Miscellaneous.ZynqMP_IPI @ sysbus 0xff300000
 
 ipiMailbox: Memory.MappedMemory @ sysbus 0xff990000
     size: 0x1000
+
+rtc: Timers.ZynqMP_RTC @ sysbus 0xffa60000
+    SecondIRQ -> apuGic@26 | rpuGic@26
+    AlarmIRQ -> apuGic@27 | rpuGic@27
 
 platformManagementUnit: Miscellaneous.ZynqMP_PlatformManagementUnit @ ipi
     apu0: apu0

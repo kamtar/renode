@@ -224,6 +224,14 @@ def can_be_freed_by_killing_other_job(port, autokill):
         pass
     return False
 
+def report_dead_subprocess(process):
+    exception_message = "\n".join([
+                                  f"{process.executable} process died(pid == -1)?? Here are some details",
+                                  f"\t stdout = {process.stdout}",
+                                  f"\t stderr = {process.stderr}",
+                                  f"\t return code = {process.returncode}"])
+    raise RuntimeError(exception_message)
+
 
 class KeywordsFinder(robot.model.SuiteVisitor):
     def __init__(self, keyword):
@@ -397,6 +405,9 @@ class RobotTestSuite(object):
             if options.keep_renode_output:
                 print("Note: --keep-renode-output is not supported when using --run-gdb")
 
+            if p.pid == -1:
+                report_dead_subprocess(p)
+
             print("Waiting for Renode process to start")
             while True:
                 # We strip argv[0] because if we pass just `mono` to GDB it will resolve
@@ -425,6 +436,9 @@ class RobotTestSuite(object):
             pid_file_path = os.path.join(self.remote_server_directory, pid_filename)
             perf_renode_timeout = 10
 
+            if p.pid == -1:
+                report_dead_subprocess(p)
+
             while not os.path.exists(pid_file_path) and perf_renode_timeout > 0:
                 sleep(0.5)
                 perf_renode_timeout -= 1
@@ -436,19 +450,27 @@ class RobotTestSuite(object):
                 self.renode_pid = pid_file.read()
         else:
             # Start Renode
+            file_name = os.path.splitext(os.path.basename(self.path))[0]
+            os.environ["GCOV_PREFIX"] = os.path.join(os.getcwd(), f"output/coverage/{file_name}")
             if options.keep_renode_output:
                 output_dir = self.get_output_dir(options, iteration_index, suite_retry_index)
                 logs_dir = os.path.join(output_dir, 'logs')
                 os.makedirs(logs_dir, exist_ok=True)
-                file_name = os.path.splitext(os.path.basename(self.path))[0]
                 suite_name = RobotTestSuite._create_suite_name(file_name, None)
                 fout = open(os.path.join(logs_dir, f"{suite_name}.renode_stdout.log"), "wb", buffering=0)
                 ferr = open(os.path.join(logs_dir, f"{suite_name}.renode_stderr.log"), "wb", buffering=0)
                 p = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=fout, stderr=ferr)
+                if p.pid == -1:
+                    report_dead_subprocess(p)
+
                 self.renode_pid = p.pid
             else:
                 p = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1)
+                if p.pid == -1:
+                    report_dead_subprocess(p)
                 self.renode_pid = p.pid
+
+        assert self.renode_pid != -1, "Renode PID has to be set before trying to acces the port file"
 
         timeout_s = 180
         countdown = float(timeout_s)
@@ -474,7 +496,6 @@ class RobotTestSuite(object):
             self._close_remote_server(p, options)
             raise RuntimeError(f"Renode was expected to use port {remote_server_port} but {self.remote_server_port} port is used instead!")
 
-        assert self.renode_pid != -1, "Renode PID has to be set before returning"
         return p
 
     def __move_perf_data(self, options):
@@ -520,6 +541,17 @@ class RobotTestSuite(object):
 
             # None of the previously provided states are available after closing the server.
             self._dependencies_met = set()
+
+    @classmethod
+    def _has_renode_crashed(cls, test: ET.Element) -> bool:
+        # only finds immediate children - required because `status`
+        # nodes are also present lower in the tree for example
+        # for every keyword but we only need the status of the test
+        status: ET.Element = test.find('status')
+        if status.text is not None and cls.retry_suite_regex.search(status.text):
+            return True
+        else:
+            return any(cls.retry_suite_regex.search(msg.text) for msg in test.iter("msg"))
 
 
     def run(self, options, run_id=0, iteration_index=1, suite_retry_index=0):
@@ -704,12 +736,9 @@ class RobotTestSuite(object):
                 # Look for regular expressions signifying a crash.
                 # Suite Setup and Suite Teardown aren't checked here cause they're in the `kw` tags.
                 for test in suite.iter('test'):
-                    status = test.find('status') # only finds immediate children - important requirement
-                    if status.text is not None and self.retry_suite_regex.search(status.text):
+                    if self._has_renode_crashed(test):
                         return True
-                    for msg in test.iter("msg"):
-                        if msg.text is not None and self.retry_suite_regex.search(msg.text):
-                            return True
+
         return False
 
 
@@ -904,6 +933,40 @@ class RobotTestSuite(object):
                 os.rename(src_fpath, dest_fpath)
 
 
+    def tests_failed_due_to_renode_crash(self) -> bool:
+        # Return false if the test has not yet run
+        if self.suite_log_files is None:
+            return
+        for file in self.suite_log_files:
+            try:
+                tree = ET.parse(file)
+            except FileNotFoundError:
+                continue
+
+            root = tree.getroot()
+
+            for suite in root.iter('suite'):
+                if not suite.get('source', False):
+                    continue # it is a tag used to group other suites without meaning on its own
+                for test in suite.iter('test'):
+                    # do not check skipped tests
+                    if test.find("./tags/[tag='skipped']"):
+                        continue
+
+                    # only finds immediate children - required because `status`
+                    # nodes are also present lower in the tree for example
+                    # for every keyword but we only need the status of the test
+                    status = test.find('status')
+                    if status.attrib["status"] != "FAIL":
+                        continue # passed tests should not be checked for crashes
+
+                    # check whether renode crashed during this test
+                    if self._has_renode_crashed(test):
+                        return True
+
+        return False
+
+
     @staticmethod
     def find_failed_tests(path, file="robot_output.xml"):
         ret = {'mandatory': set(), 'non_critical': set()}
@@ -1033,11 +1096,7 @@ class RobotTestSuite(object):
                     m = cls.retry_test_regex.search(status.text) if status.text is not None else None
 
                     # Check whether renode crashed during this test
-                    has_renode_crashed = False
-                    if status.text is not None and cls.retry_suite_regex.search(status.text):
-                        has_renode_crashed = True
-                    else:
-                        has_renode_crashed = any(cls.retry_suite_regex.search(msg.text) for msg in test.iter("msg"))
+                    has_renode_crashed = cls._has_renode_crashed(test)
 
                     status_str = status.attrib["status"]
                     nth = (1 + int(m.group(2))) if m else 1

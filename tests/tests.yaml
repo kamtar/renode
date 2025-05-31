@@ -22,6 +22,7 @@
 - tests/unit-tests/demos.robot
 - tests/unit-tests/robot-integration.robot
 - tests/unit-tests/riscv-unit-tests.robot
+- tests/unit-tests/riscv-amocas.robot
 - tests/unit-tests/mpu.robot
 - tests/unit-tests/arm-atomic.robot
 - tests/platforms/SAME70.robot
@@ -31,13 +32,13 @@
 - tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot
 - tests/platforms/Fomu.robot
 - tests/platforms/verilated/UARTLite.robot
-- tests/platforms/verilated/axi.robot
 - tests/platforms/verilated/MuraxAPB3.robot
 - tests/platforms/verilated/zynq_verilated_fastvdma.robot
 - tests/platforms/verilated/zynq_verilated_fpga_isp.robot
 - tests/platforms/verilated/verilated_ibex_litex_bios.robot
 - tests/platforms/verilated/verilated_ibex_interrupts.robot
 - tests/platforms/verilated/verilated_ibex_pause_resume.robot
+- tests/platforms/verilated/litex_vexriscv_verilated_cfu.robot
 - tests/platforms/CC2538/cc2538_rpl-udp.robot
 - tests/platforms/CC2538/cc2538_flash_controller.robot
 - tests/platforms/CC2538/cc2538_single-node.robot
@@ -145,6 +146,7 @@
 - tests/platforms/Renesas_DA14592.robot
 - tests/platforms/Renesas_RZ_G2L.robot
 - tests/peripherals/ICP_101xx.robot
+- tests/peripherals/NXP_INTMUX.robot
 - tests/unit-tests/grammar-number-separator.robot
 - tests/peripherals/PL330_DMA.robot
 - tests/platforms/GR712RC.robot
@@ -188,3 +190,8 @@
 - tests/platforms/S32K388.robot
 - tests/unit-tests/bus-isolation.robot
 - tests/unit-tests/bus-performance.robot
+- tests/unit-tests/profiler-trace.robot
+- tests/platforms/imxrt500.robot
+
+- ports_3335_3336:
+  - tests/platforms/verilated/axi.robot

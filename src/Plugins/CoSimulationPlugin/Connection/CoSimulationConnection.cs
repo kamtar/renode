@@ -26,15 +26,11 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                                                  string machineName,
                                                  string name = null,
                                                  long frequency = DefaultTimeunitFrequency,
-                                                 string simulationFilePathLinux = null,
-                                                 string simulationFilePathWindows = null,
-                                                 string simulationFilePathMacOS = null,
-                                                 string simulationContextLinux = null,
-                                                 string simulationContextWindows = null,
-                                                 string simulationContextMacOS = null,
                                                  ulong limitBuffer = DefaultLimitBuffer,
                                                  int timeout = DefaultTimeout,
-                                                 string address = null
+                                                 string address = null,
+                                                 int mainListenPort = 0,
+                                                 int asyncListenPort = 0
                                                  )
         {
             EmulationManager.Instance.CurrentEmulation.TryGetMachine(machineName, out var machine);
@@ -43,10 +39,7 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                 throw new ConstructionException($"Machine {machineName} does not exist.");
             }
 
-            var cosimConnection = new CoSimulationConnection(machine, name, frequency,
-                    simulationFilePathLinux, simulationFilePathWindows, simulationFilePathMacOS,
-                    simulationContextLinux, simulationContextWindows, simulationContextMacOS,
-                    limitBuffer, timeout, address);
+            var cosimConnection = new CoSimulationConnection(machine, name, frequency, limitBuffer, timeout, address, mainListenPort, asyncListenPort);
         }
 
         public const ulong DefaultLimitBuffer = 1000000;
@@ -58,21 +51,17 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
         public CoSimulationConnection(IMachine machine,
                 string name,
                 long frequency,
-                string simulationFilePathLinux,
-                string simulationFilePathWindows,
-                string simulationFilePathMacOS,
-                string simulationContextLinux,
-                string simulationContextWindows,
-                string simulationContextMacOS,
                 ulong limitBuffer,
                 int timeout,
-                string address)
+                string address,
+                int mainListenPort,
+                int asyncListenPort)
         {
             this.machine = machine;
             this.gpioEntries = new List<GPIOEntry>();
 
             RegisterInHostMachine(name);
-            cosimConnection = SetupConnection(address, timeout, frequency, limitBuffer);
+            cosimConnection = SetupConnection(address, timeout, frequency, limitBuffer, mainListenPort, asyncListenPort);
 
             cosimIdxToPeripheral = new Dictionary<int, ICoSimulationConnectible>();
         }
@@ -81,7 +70,7 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
         {
             if(cosimIdxToPeripheral.ContainsKey(peripheral.CosimToRenodeIndex))
             {
-                throw new RecoverableException("Failed to add a peripheral to co-simulated connection. Make sure all connected peripherals have correctly assigned, unique cosimulation subordinate and manager indices in platform definition.");
+                throw new RecoverableException($"Failed to add a peripheral to co-simulated connection: Duplicate CosimToRenode index {peripheral.CosimToRenodeIndex}. Make sure all connected peripherals have unique cosimToRenodeIndex and renodeToCosimIndex parameters in platform definition.");
             }
             cosimIdxToPeripheral.Add(peripheral.CosimToRenodeIndex, peripheral);
             peripheral.OnConnectionAttached(this);
@@ -217,9 +206,10 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
         public void Send(ICoSimulationConnectible connectible, ActionType actionId, ulong offset, ulong value)
         {
             int renodeToCosimIndex = connectible != null ? connectible.RenodeToCosimIndex : ProtocolMessage.NoPeripheralIndex;
-            if(!cosimConnection.TrySendMessage(new ProtocolMessage(actionId, offset, value, renodeToCosimIndex)))
+            var message = new ProtocolMessage(actionId, offset, value, renodeToCosimIndex);
+            if(!cosimConnection.TrySendMessage(message))
             {
-                AbortAndLogError("Send error!");
+                AbortAndLogError($"Failed to send message: {message}");
             }
         }
 
@@ -260,7 +250,7 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
             {
                 if(entry.range.Intersects(translationRange))
                 {
-                    throw new ConfigurationException($"Cannot register cosimulation GPIO receive callback on range [{translationRange.StartAddress}, {translationRange.EndAddress}] - there already is a callback registered on intersecting range [{entry.range.StartAddress}, {entry.range.EndAddress}]"); 
+                    throw new ConfigurationException($"Cannot register cosimulation GPIO receive callback on range [{translationRange.StartAddress}, {translationRange.EndAddress}] - there already is a callback registered on intersecting range [{entry.range.StartAddress}, {entry.range.EndAddress}]");
                 }
             }
             gpioEntries.Add(new GPIOEntry(translationRange, callback));
@@ -311,12 +301,12 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
             throw new CpuAbortException();
         }
 
-        private ICoSimulationConnection SetupConnection(string address, int timeout, long frequency, ulong limitBuffer)
+        private ICoSimulationConnection SetupConnection(string address, int timeout, long frequency, ulong limitBuffer, int mainListenPort, int asyncListenPort)
         {
             ICoSimulationConnection cosimConnection = null;
             if(address != null)
             {
-                cosimConnection = new SocketConnection(this, timeout, HandleReceivedMessage, address);
+                cosimConnection = new SocketConnection(this, timeout, HandleReceivedMessage, address, mainListenPort, asyncListenPort);
             }
             else
             {
@@ -333,7 +323,7 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                 {
                     if(!cosimConnection.TrySendMessage(new ProtocolMessage(ActionType.TickClock, 0, limitBuffer, ProtocolMessage.NoPeripheralIndex)))
                     {
-                        AbortAndLogError("Send error!");
+                        AbortAndLogError("Failed to send or didn't receive TickClock action response.");
                     }
                     this.NoisyLog("Tick: TickClock sent, waiting for the verilated peripheral...");
                     if(!allTicksProcessedARE.WaitOne(timeout))

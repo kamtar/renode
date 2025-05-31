@@ -102,6 +102,7 @@ Configure Machine
     # Needed to check PC between the blocks on a hook
     Execute Command                 cpu MaximumBlockSize 1
     Execute Command                 cpu SetHookAtBlockBegin "self.DebugLog('block started: ' + 'PC '+ str(self.PC))"
+    Execute Command		            cpu ChainingEnabled True
 
     Create Log Tester               0.01  defaultPauseEmulation=true
     Execute Command                 logLevel -1
@@ -147,13 +148,12 @@ Test SyncPCEveryInstructionDisabled False
 *** Test Cases ***
 Should Report Wrong PC Between Chained Blocks
     [Template]                      Syncing Disabled Template
-    ${PLAT_RISCV}                   ${PROG_RISCV}
     ${PLAT_ARM}                     ${PROG_ARM}
     ${PLAT_ARM64}                   ${PROG_ARM}
     ${PLAT_ARM-M}                   ${PROG_ARM}
     ${PLAT_POWERPC}                 ${PROG_POWERPC}
     ${PLAT_SPARC}                   ${PROG_SPARC}
-    # PC is already updated between instructions for Xtensa and X86
+    # PC is already updated between instructions for RISC-V, Xtensa and X86
 
 Should Report Correct PC Between Chained Blocks
     [Template]                      Syncing Enabled Template

@@ -96,6 +96,15 @@ class RESDBlock:
     def _samples_sizeof(self):
         pass
 
+    @classmethod
+    def _wrap_sample(cls, sample):
+        if isinstance(sample, bytes):
+            sample = {
+                'size': len(sample),
+                'data': sample,
+            }
+        return sample
+
 
 class RESDBlockConstantFrequency(RESDBlock):
     __period = int(1e9)
@@ -126,7 +135,7 @@ class RESDBlockConstantFrequency(RESDBlock):
         self.__start_time = value
 
     def add_sample(self, sample):
-        self.samples.append({'sample': sample})
+        self.samples.append({'sample': RESDBlock._wrap_sample(sample)})
 
     def _subheader(self):
         return {
@@ -150,7 +159,7 @@ class RESDBlockArbitraryTimestamp(RESDBlock):
         self.__start_time = value
 
     def add_sample(self, sample, timestamp):
-        self.samples.append({'sample': sample, 'timestamp': timestamp})
+        self.samples.append({'sample': RESDBlock._wrap_sample(sample), 'timestamp': timestamp})
 
     def _subheader(self):
         return {
@@ -173,18 +182,18 @@ class RESDBlockMetadata:
 
         method = name[len(prefix):]
         type_idx = ({
-            'int8':   0x00,
-            'uint8':  0x01,
-            'int16':  0x02,
-            'uint16': 0x03,
-            'int32':  0x04,
-            'uint32': 0x05,
-            'int64':  0x06,
-            'uint64': 0x07,
-            'float':  0x08,
-            'double': 0x09,
-            'text':   0x0A,
-            'blob':   0x0B,
+            'int8':   0x01,
+            'uint8':  0x02,
+            'int16':  0x03,
+            'uint16': 0x04,
+            'int32':  0x05,
+            'uint32': 0x06,
+            'int64':  0x07,
+            'uint64': 0x08,
+            'float':  0x09,
+            'double': 0x0A,
+            'text':   0x0B,
+            'blob':   0x0C,
         }).get(method, None)
 
         if method is None:
@@ -208,7 +217,7 @@ class RESDBlockMetadata:
     def _insert(self, type_idx, key, value):
         self.remove(key)
         self.keys.add(key)
-        self.metadata.push({
+        self.metadata.append({
             'type': type_idx,
             'key': key,
             'value': value
