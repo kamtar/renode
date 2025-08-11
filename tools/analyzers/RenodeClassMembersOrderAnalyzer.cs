@@ -67,9 +67,34 @@ namespace Antmicro.Renode.CustomAnalyzers
 
         public static bool TryGetClassMemberOrder(MemberDeclarationSyntax node, out ClassMemberOrder classMemberOrder)
         {
+            var ignoredModifiers = ImmutableHashSet.Create
+            (
+                "async",
+                "extern",
+                "internal",
+                "override",
+                "partial",
+                "sealed",
+                "unsafe",
+                "virtual",
+                "volatile"
+            );
+
+            var modifiersOrder = new Dictionary<string, int>
+            {
+                {"public",      0},
+                {"protected",   0},
+                {"private",     0},
+                {"static",      1},
+                {"abstract",    2},
+                {"readonly",    3},
+                {"const",       3},
+            }.ToImmutableDictionary();
+
             var modifiers = node
                 .Modifiers
-                .Aggregate("", (acc, val) => $"{acc}_{val}");
+                .OrderBy(mod => modifiersOrder.GetValueOrDefault(mod.ToString(), -1))
+                .Aggregate("", (acc, val) => ignoredModifiers.Contains(val.ToString()) ? acc : $"{acc}_{val}");
             var id = $"{modifiers}_{node.Kind()}";
 
             if(ClassMembersOrderMap.TryGetValue(id, out classMemberOrder))
@@ -93,6 +118,8 @@ namespace Antmicro.Renode.CustomAnalyzers
             {"_public_MethodDeclaration",                           ClassMemberOrder.PublicMethod},
             {"_public_abstract_MethodDeclaration",                  ClassMemberOrder.PublicAbstractMethod},
             {"_public_PropertyDeclaration",                         ClassMemberOrder.PublicProperty},
+            {"_public_abstract_PropertyDeclaration",                ClassMemberOrder.PublicAbstractProperty},
+            {"_public_abstract_readonly_PropertyDeclaration",       ClassMemberOrder.PublicAbstractProperty},
             {"_public_EventFieldDeclaration",                       ClassMemberOrder.PublicEvent},
             {"_public_FieldDeclaration",                            ClassMemberOrder.PublicField},
             {"_public_readonly_FieldDeclaration",                   ClassMemberOrder.PublicReadonlyField},
@@ -105,7 +132,10 @@ namespace Antmicro.Renode.CustomAnalyzers
             {"_protected_static_FieldDeclaration",                  ClassMemberOrder.ProtectedStaticField},
             {"_protected_ConstructorDeclaration",                   ClassMemberOrder.ProtectedConstructor},
             {"_protected_MethodDeclaration",                        ClassMemberOrder.ProtectedMethod},
+            {"_protected_abstract_MethodDeclaration",               ClassMemberOrder.ProtectedAbstractMethod},
             {"_protected_PropertyDeclaration",                      ClassMemberOrder.ProtectedProperty},
+            {"_protected_abstract_PropertyDeclaration",             ClassMemberOrder.ProtectedAbstractProperty},
+            {"_protected_abstract_readonly_PropertyDeclaration",    ClassMemberOrder.ProtectedAbstractProperty},
             {"_protected_EventFieldDeclaration",                    ClassMemberOrder.ProtectedEvent},
             {"_protected_FieldDeclaration",                         ClassMemberOrder.ProtectedField},
             {"_protected_readonly_FieldDeclaration",                ClassMemberOrder.ProtectedReadonlyField},
@@ -115,22 +145,28 @@ namespace Antmicro.Renode.CustomAnalyzers
             {"_private_static_FieldDeclaration",                    ClassMemberOrder.PrivateStaticField},
             {"_private_ConstructorDeclaration",                     ClassMemberOrder.PrivateConstructor},
             {"_private_MethodDeclaration",                          ClassMemberOrder.PrivateMethod},
+            {"_private_abstract_MethodDeclaration",                 ClassMemberOrder.PrivateAbstractMethod},
             {"_private_PropertyDeclaration",                        ClassMemberOrder.PrivateProperty},
+            {"_private_abstract_PropertyDeclaration",               ClassMemberOrder.PrivateAbstractProperty},
+            {"_private_abstract_readonly_PropertyDeclaration",      ClassMemberOrder.PrivateAbstractProperty},
             {"_private_FieldDeclaration",                           ClassMemberOrder.PrivateField},
             {"_private_readonly_FieldDeclaration",                  ClassMemberOrder.PrivateReadonlyField},
             {"_private_const_FieldDeclaration",                     ClassMemberOrder.PrivateConst},
 
             {"_public_ClassDeclaration",                            ClassMemberOrder.PublicClass},
+            {"_public_abstract_ClassDeclaration",                   ClassMemberOrder.PublicAbstractClass},
             {"_public_StructDeclaration",                           ClassMemberOrder.PublicStruct},
             {"_public_DelegateDeclaration",                         ClassMemberOrder.PublicDelegate},
             {"_public_EnumDeclaration",                             ClassMemberOrder.PublicEnum},
 
             {"_protected_ClassDeclaration",                         ClassMemberOrder.ProtectedClass},
+            {"_protected_abstract_ClassDeclaration",                ClassMemberOrder.ProtectedAbstractClass},
             {"_protected_StructDeclaration",                        ClassMemberOrder.ProtectedStruct},
             {"_protected_DelegateDeclaration",                      ClassMemberOrder.ProtectedDelegate},
             {"_protected_EnumDeclaration",                          ClassMemberOrder.ProtectedEnum},
 
             {"_private_ClassDeclaration",                           ClassMemberOrder.PrivateClass},
+            {"_private_abstract_ClassDeclaration",                  ClassMemberOrder.PrivateAbstractClass},
             {"_private_StructDeclaration",                          ClassMemberOrder.PrivateStruct},
             {"_private_DelegateDeclaration",                        ClassMemberOrder.PrivateDelegate},
             {"_private_EnumDeclaration",                            ClassMemberOrder.PrivateEnum},
@@ -161,6 +197,7 @@ namespace Antmicro.Renode.CustomAnalyzers
             PublicMethod,
             PublicAbstractMethod,
             PublicProperty,
+            PublicAbstractProperty,
             PublicEvent,
             PublicField,
             PublicReadonlyField,
@@ -172,7 +209,9 @@ namespace Antmicro.Renode.CustomAnalyzers
             ProtectedStaticField,
             ProtectedConstructor,
             ProtectedMethod,
+            ProtectedAbstractMethod,
             ProtectedProperty,
+            ProtectedAbstractProperty,
             ProtectedEvent,
             ProtectedField,
             ProtectedReadonlyField,
@@ -181,19 +220,24 @@ namespace Antmicro.Renode.CustomAnalyzers
             PrivateStaticField,
             PrivateConstructor,
             PrivateMethod,
+            PrivateAbstractMethod,
             PrivateProperty,
+            PrivateAbstractProperty,
             PrivateField,
             PrivateReadonlyField,
             PrivateConst,
             PublicClass,
+            PublicAbstractClass,
             PublicStruct,
             PublicDelegate,
             PublicEnum,
             ProtectedClass,
+            ProtectedAbstractClass,
             ProtectedStruct,
             ProtectedDelegate,
             ProtectedEnum,
             PrivateClass,
+            PrivateAbstractClass,
             PrivateStruct,
             PrivateDelegate,
             PrivateEnum,

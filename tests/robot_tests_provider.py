@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import uuid
 import re
+import signal
 from collections import OrderedDict, defaultdict
 from time import monotonic, sleep
 from typing import List, Dict, Tuple, Set
@@ -121,7 +122,14 @@ def install_cli_arguments(parser):
                         action="store",
                         default=3,
                         type=int,
-                        help="Robot frontend process cleanup timeout.")
+                        help="Robot frontend process cleanup timeout in seconds.")
+
+    parser.add_argument("--kill-timeout",
+                        dest="kill_timeout",
+                        action="store",
+                        default=15,
+                        type=int,
+                        help="Robot frontend process kill timeout in seconds if cleanup attempt fails.")
 
     parser.add_argument("--listener",
                         action="append",
@@ -160,24 +168,19 @@ def verify_cli_arguments(options):
     # port is not available on Windows
     if platform != "win32":
         if options.port == str(options.remote_server_port):
-            print('Port {} is reserved for Robot Framework remote server and cannot be used for remote debugging.'.format(options.remote_server_port))
-            sys.exit(1)
+            raise Exception('Port {} is reserved for Robot Framework remote server and cannot be used for remote debugging.'.format(options.remote_server_port))
         if options.port is not None and options.jobs != 1:
-            print("Debug port cannot be used in parallel runs")
-            sys.exit(1)
+            raise Exception("Debug port cannot be used in parallel runs")
 
     if options.css_file:
         if not os.path.isabs(options.css_file):
             options.css_file = os.path.join(this_path, options.css_file)
 
         if not os.path.isfile(options.css_file):
-            print("Unable to find provided CSS file: {0}.".format(options.css_file))
-            sys.exit(1)
+            raise Exception("Unable to find provided CSS file: {0}.".format(options.css_file))
 
     if options.remote_server_port != 0 and options.jobs != 1:
-        print("Parallel execution and fixed Robot port number options cannot be used together")
-        sys.exit(1)
-
+        raise Exception("Parallel execution and fixed Robot port number options cannot be used together")
 
 def is_process_running(pid):
     if not psutil.pid_exists(pid):
@@ -303,11 +306,6 @@ class RobotTestSuite(object):
         self.tests_without_hotspots = []
 
 
-    def check(self, options, number_of_runs):
-        # Checking if there are no other jobs is moved to `prepare` as it is now possible to skip used ports
-        pass
-
-
     def get_output_dir(self, options, iteration_index, suite_retry_index):
         return os.path.join(
             options.results_directory,
@@ -358,15 +356,13 @@ class RobotTestSuite(object):
         remote_server_binary = os.path.join(self.remote_server_directory, remote_server_name)
 
         if not os.path.isfile(remote_server_binary):
-            print("Robot framework remote server binary not found: '{}'! Did you forget to build?".format(remote_server_binary))
-            sys.exit(1)
+            raise Exception("Robot framework remote server binary not found: '{}'! Did you forget to build?".format(remote_server_binary))
 
         if remote_server_port is None:
             remote_server_port = options.remote_server_port
 
         if remote_server_port != 0 and not is_port_available(remote_server_port, options.autokill_renode):
-            print("The selected port {} is not available".format(remote_server_port))
-            sys.exit(1)
+            raise Exception("The selected port {} is not available".format(remote_server_port))
 
         command = [remote_server_binary, '--robot-server-port', str(remote_server_port)]
         if not options.show_log and not options.keep_renode_output:
@@ -396,23 +392,24 @@ class RobotTestSuite(object):
             options.exclude.append('skip_dotnet')
 
         renode_command = command
+        stdout_path, stderr_path = None, None
 
         # if we started GDB, wait for the user to start Renode as a child process
         if options.run_gdb:
             command = ['gdb', '-nx', '-ex', 'handle SIGXCPU SIG33 SIG35 SIG36 SIGPWR nostop noprint', '--args'] + command
-            p = psutil.Popen(command, cwd=self.remote_server_directory, bufsize=1)
+            process = psutil.Popen(command, cwd=self.remote_server_directory, bufsize=1)
 
             if options.keep_renode_output:
                 print("Note: --keep-renode-output is not supported when using --run-gdb")
 
-            if p.pid == -1:
-                report_dead_subprocess(p)
+            if process.pid == -1:
+                report_dead_subprocess(process)
 
             print("Waiting for Renode process to start")
             while True:
                 # We strip argv[0] because if we pass just `mono` to GDB it will resolve
                 # it to a full path to mono on the PATH, for example /bin/mono
-                renode_child = next((c for c in p.children() if c.cmdline()[1:] == renode_command[1:]), None)
+                renode_child = next((c for c in process.children() if c.cmdline()[1:] == renode_command[1:]), None)
                 if renode_child:
                     break
                 sleep(0.5)
@@ -423,21 +420,21 @@ class RobotTestSuite(object):
 
             command = ['perf', 'record', '-q', '-g', '-F', 'max'] + command + ['--pid-file', pid_filename]
 
-            perf_stdout_stderr_file_name = "perf_stdout_stderr"
+            stdout_path = "perf_stdout_stderr"
 
             if options.keep_renode_output:
                 print("Note: --keep-renode-output is not supported when using --perf-output-path")
 
-            print(f"WARNING: perf stdout and stderr is being redirected to {perf_stdout_stderr_file_name}")
+            print(f"WARNING: perf stdout and stderr is being redirected to {stdout_path}")
 
-            perf_stdout_stderr_file = open(perf_stdout_stderr_file_name, "w")
-            p = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=perf_stdout_stderr_file, stderr=perf_stdout_stderr_file)
+            perf_stdout_stderr_file = open(stdout_path, "w")
+            process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=perf_stdout_stderr_file, stderr=perf_stdout_stderr_file)
 
             pid_file_path = os.path.join(self.remote_server_directory, pid_filename)
             perf_renode_timeout = 10
 
-            if p.pid == -1:
-                report_dead_subprocess(p)
+            if process.pid == -1:
+                report_dead_subprocess(process)
 
             while not os.path.exists(pid_file_path) and perf_renode_timeout > 0:
                 sleep(0.5)
@@ -457,18 +454,20 @@ class RobotTestSuite(object):
                 logs_dir = os.path.join(output_dir, 'logs')
                 os.makedirs(logs_dir, exist_ok=True)
                 suite_name = RobotTestSuite._create_suite_name(file_name, None)
-                fout = open(os.path.join(logs_dir, f"{suite_name}.renode_stdout.log"), "wb", buffering=0)
-                ferr = open(os.path.join(logs_dir, f"{suite_name}.renode_stderr.log"), "wb", buffering=0)
-                p = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=fout, stderr=ferr)
-                if p.pid == -1:
-                    report_dead_subprocess(p)
+                stdout_path = os.path.join(logs_dir, f"{suite_name}.renode_stdout.log")
+                stderr_path = os.path.join(logs_dir, f"{suite_name}.renode_stderr.log")
+                fout = open(stdout_path, "wb", buffering=0)
+                ferr = open(stderr_path, "wb", buffering=0)
+                process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=fout, stderr=ferr)
+                if process.pid == -1:
+                    report_dead_subprocess(process)
 
-                self.renode_pid = p.pid
+                self.renode_pid = process.pid
             else:
-                p = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1)
-                if p.pid == -1:
-                    report_dead_subprocess(p)
-                self.renode_pid = p.pid
+                process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1)
+                if process.pid == -1:
+                    report_dead_subprocess(process)
+                self.renode_pid = process.pid
 
         assert self.renode_pid != -1, "Renode PID has to be set before trying to acces the port file"
 
@@ -478,25 +477,48 @@ class RobotTestSuite(object):
         renode_port_file = os.path.join(temp_dir, f'renode-{self.renode_pid}', 'robot_port')
         while countdown > 0:
             try:
-                with open(renode_port_file) as f:
+                with open(renode_port_file, 'r') as f:
                     port_num = f.readline()
                     if port_num == '':
                         continue
                     self.remote_server_port = int(port_num)
                 break
-            except:
+            except (FileNotFoundError, PermissionError):
                 sleep(0.5)
                 countdown -= 0.5
         else:
-            self._close_remote_server(p, options)
-            raise TimeoutError(f"Couldn't access port file for Renode instance pid {self.renode_pid}; timed out after {timeout_s}s")
+            # PID is preserved for error message as the field gets reset in `self._close_remote_server`.
+            process_pid = self.renode_pid
+            self.log_process_data(process, stdout_path, stderr_path)
+            self._close_remote_server(process, options)
+            raise TimeoutError(f"Couldn't access port file for Renode instance pid {process_pid}; timed out after {timeout_s}s")
 
         # If a certain port was expected, let's make sure Renode uses it.
         if remote_server_port and remote_server_port != self.remote_server_port:
-            self._close_remote_server(p, options)
+            self._close_remote_server(process, options)
             raise RuntimeError(f"Renode was expected to use port {remote_server_port} but {self.remote_server_port} port is used instead!")
 
-        return p
+        return process
+
+    def log_process_data(self, process, stdout_path, stderr_path):
+        process.poll()
+
+        separator = "=" * 80
+        process_summary = "\n".join(
+            [
+                separator,
+                f"Process `{' '.join(process.args)}` [pid: {process.pid}] state:",
+                f"return code: {process.returncode}",
+            ]
+        )
+        if stdout_path:
+            with open(stdout_path, 'rt') as stdout:
+                process_summary += f"\nstdout: \n{stdout.read()}"
+        if stderr_path:
+            with open(stderr_path, 'rt') as stderr:
+                process_summary += f"\nstderr: \n{stderr.read()}"
+        process_summary += separator
+        print(process_summary)
 
     def __move_perf_data(self, options):
         perf_data_path = os.path.join(self.remote_server_directory, "perf.data")
@@ -509,38 +531,49 @@ class RobotTestSuite(object):
 
         shutil.move(perf_data_path, options.perf_output_path)
 
-    def _close_remote_server(self, proc, options, cleanup_timeout_override=None, silent=False):
-        if proc:
-            if not silent:
-                print('Closing Renode pid {}'.format(proc.pid))
+    def _close_remote_server(self, proc, options):
+        if not proc:
+            return
 
-            # Let's prevent using these after the server is closed.
-            self.robot_frontend_process = None
-            self.renode_pid = -1
+        renode = f"Renode pid {proc.pid}"
+        renode_killed = False
 
+        # Let's prevent using these after the server is closed.
+        self.robot_frontend_process = None
+        self.renode_pid = -1
+
+        # None of the previously provided states will be available.
+        self._dependencies_met = set()
+
+        # poll returns exit code if process exited which means it doesn't need to be closed.
+        if (exit_code := proc.poll()) is None:
+            print(f"Closing {renode}")
             try:
                 process = psutil.Process(proc.pid)
-                os.kill(proc.pid, 2)
-                if cleanup_timeout_override is not None:
-                    cleanup_timeout = cleanup_timeout_override
-                else:
-                    cleanup_timeout = options.cleanup_timeout
-                process.wait(timeout=cleanup_timeout)
+                os.kill(proc.pid, signal.SIGINT)
+                process.wait(timeout=options.cleanup_timeout)
 
                 if options.perf_output_path:
                     self.__move_perf_data(options)
             except psutil.TimeoutExpired:
+                print(f"{renode} didn't close in {options.cleanup_timeout}s, killing it")
                 process.kill()
-                process.wait()
-            except psutil.NoSuchProcess:
-                #evidently closed by other means
-                pass
 
-            if options.perf_output_path and proc.stdout:
-                proc.stdout.close()
+                try:
+                    process.wait(timeout=options.kill_timeout)
+                    renode_killed = True
+                except psutil.TimeoutExpired:
+                    raise RuntimeError(f"{renode} didn't react to kill in {options.kill_timeout}s")
 
-            # None of the previously provided states are available after closing the server.
-            self._dependencies_met = set()
+        if options.perf_output_path and proc.stdout:
+            proc.stdout.close()
+
+        if exit_code:
+            print(f"{renode} exited before close request, exit code: {exit_code}")
+        elif renode_killed:
+            print(f"{renode} killed")
+        else:
+            print(f"{renode} closed")
 
     @classmethod
     def _has_renode_crashed(cls, test: ET.Element) -> bool:
@@ -554,7 +587,7 @@ class RobotTestSuite(object):
             return any(cls.retry_suite_regex.search(msg.text) for msg in test.iter("msg"))
 
 
-    def run(self, options, run_id=0, iteration_index=1, suite_retry_index=0):
+    def run(self, options, iteration_index=1, suite_retry_index=0):
         if self.path.endswith('renode-keywords.robot'):
             print('Ignoring helper file: {}'.format(self.path))
             return True
@@ -852,8 +885,7 @@ class RobotTestSuite(object):
             # during timeout handling. Their timeout won't be influenced by the global timeout option.
             if self.timeout_expected_tag in test.tags:
                 if not test.timeout:
-                    print(f"!!!!! Test with a `{self.timeout_expected_tag}` tag must have `[Timeout]` set: {test.longname}")
-                    sys.exit(1)
+                    raise Exception(f"!!!!! Test with a `{self.timeout_expected_tag}` tag must have `[Timeout]` set: {test.longname}")
             elif options.timeout:
                 # Timeout from tags is used if it's shorter than the global timeout.
                 if not test.timeout or Time(test.timeout).seconds >= options.timeout.seconds:
@@ -900,7 +932,7 @@ class RobotTestSuite(object):
             print(f"{message_start} after {Time(test.timeout).seconds}s: {test.parent.name}.{test.name}")
             print(f"----- Skipped flushing emulation log and saving state due to the timeout, restarting Renode...")
 
-            self._close_remote_server(RobotTestSuite.robot_frontend_process, options, cleanup_timeout_override=0, silent=True)
+            self._close_remote_server(RobotTestSuite.robot_frontend_process, options)
             RobotTestSuite.robot_frontend_process = self._run_remote_server(options, iteration_index, suite_retry_index, self.remote_server_port)
 
             # It's typically used in suite setup (renode-keywords.robot:Setup) but we don't need to

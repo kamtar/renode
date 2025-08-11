@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2010-2023 Antmicro
+// Copyright (c) 2010-2025 Antmicro
 //
 // This file is licensed under the MIT License.
 // Full license text is available in 'licenses/MIT.txt'.
@@ -50,7 +50,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
         //not set as a token, as it may be used inside strings where we want to preserve spaces
         public static readonly Parser<char> QuotationMark = Parse.Char('"');
 
-        public static readonly Parser<string> MultiQuotationMark = Parse.String("'''").Text(); 
+        public static readonly Parser<string> MultiQuotationMark = Parse.String("'''").Text();
 
         public static readonly Parser<char> EscapeCharacter = Parse.Char('\\');
 
@@ -112,6 +112,8 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
 
         public static readonly Parser<string> InitKeyword = MakeKeyword("init");
 
+        public static readonly Parser<string> ResetKeyword = MakeKeyword("reset");
+
         public static readonly Parser<string> LocalKeyword = MakeKeyword("local");
 
         public static readonly Parser<string> PrefixedKeyword = MakeKeyword("prefixed");
@@ -140,7 +142,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
              from content in QuotedStringElement.Many().Text()
              from closingQuote in QuotationMark
              select content).Token().Named("quoted string");
-       
+
         public static readonly Parser<string> MultilineQuotedString =
             (from openingQuote in MultiQuotationMark
              from content in MultiQuotedStringElement.Many().Select(x => string.Join(String.Empty, x))
@@ -217,7 +219,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
              from colon in Colon
              from value in Value.Named("constructor or property value").Or(NoneKeyword).Or(EmptyKeyword)
              select new ConstructorOrPropertyAttribute(identifier, value)).Named("constructor or property name and value");
- 
+
         public static readonly Parser<string> QuotedMonitorStatementElement =
             (from openingQuote in QuotationMark
              from content in QuotedStringElement.Many().Text()
@@ -231,7 +233,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
             (from elements in MonitorStatementElement.Many()
              select elements.Aggregate((x, y) => x + y)).Token().Named("monitor statement");
 
-        public static readonly Parser<IEnumerable<string>> InitValue =
+        public static readonly Parser<IEnumerable<string>> MonitorStatements =
             (from openingBrace in OpeningBrace.Named("init statement list")
              from firstLine in MonitorStatement
              from rest in Separator.Then(x => MonitorStatement).XMany()
@@ -242,8 +244,15 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
             (from initKeyword in InitKeyword
              from addSuffix in Identifier.Where(x => x == "add").Optional()
              from colon in Colon
-             from initValue in InitValue
+             from initValue in MonitorStatements
              select new InitAttribute(initValue, !addSuffix.IsEmpty)).Named("init section");
+
+        public static readonly Parser<ResetAttribute> ResetAttribute =
+            (from resetKeyword in ResetKeyword
+             from addSuffix in Identifier.Where(x => x == "add").Optional()
+             from colon in Colon
+             from resetValue in MonitorStatements
+             select new ResetAttribute(resetValue, !addSuffix.IsEmpty)).Named("reset section");
 
         public static readonly Parser<IEnumerable<int>> IrqRange =
             (from leftSide in HexadecimalUnsignedInt.Or(DecimalUnsignedInt)
@@ -310,6 +319,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
              select new IrqAttribute(source.GetOrDefault(), new[] { new IrqDestinations(null, null) }));
 
         public static readonly Parser<Attribute> Attribute = InitAttribute
+            .Or<Attribute>(ResetAttribute)
             .Or<Attribute>(ConstructorOrPropertyAttribute)
             .Or(NoneIrqAttribute)
             .Or(SimpleIrqAttribute)

@@ -32,11 +32,11 @@ namespace Antmicro.Renode.PlatformDescription
 
     public sealed partial class CreationDriver
     {
-        public CreationDriver(Machine machine, IUsingResolver usingResolver, IInitHandler initHandler)
+        public CreationDriver(Machine machine, IUsingResolver usingResolver, IScriptHandler scriptHandler)
         {
             this.usingResolver = usingResolver;
             this.machine = machine;
-            this.initHandler = initHandler;
+            this.scriptHandler = scriptHandler;
             variableStore = new VariableStore();
             processedDescriptions = new List<Description>();
             objectValueUpdateQueue = new Queue<ObjectValue>();
@@ -198,17 +198,23 @@ namespace Antmicro.Renode.PlatformDescription
                 while(objectValueInitQueue.Count > 0)
                 {
                     var objectValue = objectValueInitQueue.Dequeue();
-                    initHandler.Execute(objectValue, objectValue.Attributes.OfType<InitAttribute>().Single().Lines,
-                                        x => HandleInitableError(x, objectValue));
+                    scriptHandler.Execute(objectValue, objectValue.Attributes.OfType<InitAttribute>().Single().Lines,
+                                        x => HandleInitSectionError(x, objectValue));
                 }
                 foreach(var entry in sortedForRegistration)
                 {
                     var initAttribute = entry.Attributes.OfType<InitAttribute>().SingleOrDefault();
-                    if(initAttribute == null)
+                    if(initAttribute != null)
                     {
-                        continue;
+                        scriptHandler.Execute(entry, initAttribute.Lines, x => HandleInitSectionError(x, entry));
                     }
-                    initHandler.Execute(entry, initAttribute.Lines, x => HandleInitableError(x, entry));
+
+                    var resetAttribute = entry.Attributes.OfType<ResetAttribute>().SingleOrDefault();
+                    if(resetAttribute != null)
+                    {
+                        scriptHandler.RegisterReset(entry, resetAttribute.Lines, x =>
+                            HandleError(ParsingError.ResetSectionRegistrationError, resetAttribute, x, false));
+                    }
                 }
             }
             finally
@@ -505,6 +511,7 @@ namespace Antmicro.Renode.PlatformDescription
             var ctorOrPropertyAttributes = entry.Attributes.OfType<ConstructorOrPropertyAttribute>();
             CheckRepeatedCtorAttributes(ctorOrPropertyAttributes);
             CheckRepeatedInitAttributes(entry.Attributes.OfType<InitAttribute>());
+            CheckRepeatedResetAttributes(entry.Attributes.OfType<ResetAttribute>());
 
             foreach(var attribute in entry.Attributes)
             {
@@ -566,22 +573,22 @@ namespace Antmicro.Renode.PlatformDescription
             });
             if(entry.Attributes.Any(x => x is InitAttribute))
             {
-                ValidateInitable(entry);
+                ValidateInitSection(entry);
             }
         }
 
-        private void ValidateInitable(IInitable initable)
+        private void ValidateInitSection(IScriptable scriptable)
         {
             string errorMessage;
-            if(!initHandler.Validate(initable, out errorMessage))
+            if(!scriptHandler.ValidateInit(scriptable, out errorMessage))
             {
-                HandleInitableError(errorMessage, initable);
+                HandleInitSectionError(errorMessage, scriptable);
             }
         }
 
-        private void HandleInitableError(string message, IInitable initable)
+        private void HandleInitSectionError(string message, IScriptable scriptable)
         {
-            HandleError(ParsingError.InitSectionValidationError, initable.Attributes.Single(x => x is InitAttribute), message, false);
+            HandleError(ParsingError.InitSectionValidationError, scriptable.Attributes.Single(x => x is InitAttribute), message, false);
         }
 
         private void CreateFromEntry(Entry entry)
@@ -908,20 +915,7 @@ namespace Antmicro.Renode.PlatformDescription
                 return (variable.Value as IPeripheralWithTransactionState)?.StateBits;
             }
 
-            var possibleInitiators = machine.GetPeripheralsOfType<IPeripheralWithTransactionState>();
-            if(!possibleInitiators.Any())
-            {
-                return null;
-            }
-
-            var theIntersectionOfTheirStateBitsets = possibleInitiators
-                .Select(i => i.StateBits)
-                .Aggregate((commonDict, nextDict) =>
-                    commonDict
-                        .Where(p => nextDict.TryGetValue(p.Key, out var value) && p.Value == value)
-                        .ToDictionary(p => p.Key, p => p.Value)
-                );
-            return theIntersectionOfTheirStateBitsets;
+            return machine.SystemBus.GetCommonStateBits();
         }
 
         private bool TryRegisterFromEntry(Entry entry)
@@ -1272,7 +1266,7 @@ namespace Antmicro.Renode.PlatformDescription
             }
             if(value.Attributes.Any(x => x is InitAttribute))
             {
-                ValidateInitable(value);
+                ValidateInitSection(value);
             }
             return result;
         }
@@ -1317,6 +1311,15 @@ namespace Antmicro.Renode.PlatformDescription
             if(secondInitAttribute != null)
             {
                 HandleError(ParsingError.MoreThanOneInitAttribute, secondInitAttribute, "Entry can contain only one init attribute.", false);
+            }
+        }
+
+        private void CheckRepeatedResetAttributes(IEnumerable<ResetAttribute> attributes)
+        {
+            var secondResetAttribute = attributes.Skip(1).FirstOrDefault();
+            if(secondResetAttribute != null)
+            {
+                HandleError(ParsingError.MoreThanOneResetAttribute, secondResetAttribute, "Entry can contain only one reset attribute.", false);
             }
         }
 
@@ -1366,6 +1369,7 @@ namespace Antmicro.Renode.PlatformDescription
         private ConversionResult TryConvertSimpleValue(Type expectedType, Value value, out object result, bool silent = false)
         {
             result = null;
+            expectedType = Nullable.GetUnderlyingType(expectedType) ?? expectedType;
 
             if(value is EmptyValue)
             {
@@ -1784,7 +1788,7 @@ namespace Antmicro.Renode.PlatformDescription
 
         private readonly Machine machine;
         private readonly IUsingResolver usingResolver;
-        private readonly IInitHandler initHandler;
+        private readonly IScriptHandler scriptHandler;
         private readonly VariableStore variableStore;
         private readonly List<Description> processedDescriptions;
         private readonly Queue<ObjectValue> objectValueUpdateQueue;

@@ -30,7 +30,10 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                                                  int timeout = DefaultTimeout,
                                                  string address = null,
                                                  int mainListenPort = 0,
-                                                 int asyncListenPort = 0
+                                                 int asyncListenPort = 0,
+                                                 string stdoutFile = null,
+                                                 string stderrFile = null,
+                                                 string renodeLogLevel = null
                                                  )
         {
             EmulationManager.Instance.CurrentEmulation.TryGetMachine(machineName, out var machine);
@@ -39,7 +42,7 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                 throw new ConstructionException($"Machine {machineName} does not exist.");
             }
 
-            var cosimConnection = new CoSimulationConnection(machine, name, frequency, limitBuffer, timeout, address, mainListenPort, asyncListenPort);
+            var cosimConnection = new CoSimulationConnection(machine, name, frequency, limitBuffer, timeout, address, mainListenPort, asyncListenPort, stdoutFile, stderrFile, renodeLogLevel);
         }
 
         public const ulong DefaultLimitBuffer = 1000000;
@@ -55,13 +58,22 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
                 int timeout,
                 string address,
                 int mainListenPort,
-                int asyncListenPort)
+                int asyncListenPort,
+                string stdoutFile = null,
+                string stderrFile = null,
+                string renodeLogLevel = null)
         {
             this.machine = machine;
             this.gpioEntries = new List<GPIOEntry>();
 
+            LogLevel logLevel = null;
+            if(renodeLogLevel != null && !LogLevel.TryParse(renodeLogLevel, out logLevel))
+            {
+                throw new ConstructionException($"Unable to parse log level: {renodeLogLevel}");
+            }
+
             RegisterInHostMachine(name);
-            cosimConnection = SetupConnection(address, timeout, frequency, limitBuffer, mainListenPort, asyncListenPort);
+            cosimConnection = SetupConnection(address, timeout, frequency, limitBuffer, mainListenPort, asyncListenPort, stdoutFile, stderrFile, logLevel);
 
             cosimIdxToPeripheral = new Dictionary<int, ICoSimulationConnectible>();
         }
@@ -301,15 +313,20 @@ namespace Antmicro.Renode.Plugins.CoSimulationPlugin.Connection
             throw new CpuAbortException();
         }
 
-        private ICoSimulationConnection SetupConnection(string address, int timeout, long frequency, ulong limitBuffer, int mainListenPort, int asyncListenPort)
+        private ICoSimulationConnection SetupConnection(string address, int timeout, long frequency, ulong limitBuffer, int mainListenPort, int asyncListenPort, string stdoutFile, string stderrFile, LogLevel renodeLogLevel)
         {
             ICoSimulationConnection cosimConnection = null;
             if(address != null)
             {
-                cosimConnection = new SocketConnection(this, timeout, HandleReceivedMessage, address, mainListenPort, asyncListenPort);
+                cosimConnection = new SocketConnection(this, timeout, HandleReceivedMessage, address, mainListenPort, asyncListenPort, stdoutFile, stderrFile, renodeLogLevel);
             }
             else
             {
+                if(!String.IsNullOrWhiteSpace(stdoutFile) || !String.IsNullOrWhiteSpace(stderrFile))
+                {
+                    this.Log(LogLevel.Warning, "Ignoring parameters {0} and {1}, they only affect socket-based co-simulation connections",
+                        nameof(stdoutFile), nameof(stderrFile));
+                }
                 cosimConnection = new LibraryConnection(this, timeout, HandleReceivedMessage);
             }
 

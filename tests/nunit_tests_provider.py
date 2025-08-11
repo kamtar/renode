@@ -1,6 +1,6 @@
 # pylint: disable=C0301,C0103,C0111
-from __future__ import print_function
 from sys import platform
+from platform import machine
 import os
 import signal
 import psutil
@@ -13,29 +13,29 @@ import glob
 
 from tests_engine import TestResult
 
-this_path = os.path.abspath(os.path.dirname(__file__))
+
+THIS_PATH = os.path.abspath(os.path.dirname(__file__))
+
 
 def install_cli_arguments(parser):
     parser.add_argument("--properties-file", action="store", help="Location of properties file.")
     parser.add_argument("--skip-building", action="store_true", help="Do not build tests before run.")
     parser.add_argument("--force-net-framework-version", action="store", dest="framework_ver_override", help="Override target .NET Framework version when building tests.")
 
+
 class NUnitTestSuite(object):
-    nunit_path = os.path.join(this_path, './../lib/resources/tools/nunit3/nunit3-console.exe')
+    nunit_path = os.path.join(THIS_PATH, './../lib/resources/tools/nunit3/nunit3-console.exe')
 
     def __init__(self, path):
-        #super(NUnitTestSuite, self).__init__(path)
         self.path = path
-    
-    def check(self, options, number_of_runs): #API requires this method 
-        pass 
 
+    def check(self, options, number_of_runs): # API requires this method
+        pass
 
     def get_output_dir(self, options, iteration_index, suite_retry_index):
         # Unused mechanism, this exists to keep a uniform interface with
         # robot_tests_provider.py.
         return options.results_directory
-
 
     # NOTE: if we switch to using msbuild on all platforms, we can get rid of this function and only use the '-' prefix
     def build_params(self, *params):
@@ -53,15 +53,23 @@ class NUnitTestSuite(object):
     def prepare(self, options):
         if not options.skip_building:
             print("Building {0}".format(self.path))
+            arch = 'arm' if machine() in ['aarch64', 'arm64'] else 'i386'
             if options.runner == 'dotnet':
                 self.builder = 'dotnet'
-                params = ['build', '--verbosity', 'quiet', '--configuration', options.configuration, '/p:NET=true']
+                params = ['build', '--verbosity', 'quiet', '--configuration', options.configuration, '/p:NET=true', f'/p:Architecture={arch}']
             else:
                 if platform == "win32":
                     self.builder = 'MSBuild.exe'
                 else:
                     self.builder = 'xbuild'
-                params = self.build_params('p:PropertiesLocation={0}'.format(options.properties_file), 'p:OutputPath={0}'.format(options.results_directory), 'nologo', 'verbosity:quiet', 'p:OutputDir=tests_output', 'p:Configuration={0}'.format(options.configuration))
+                params = self.build_params(
+                    f'p:PropertiesLocation={options.properties_file}',
+                    f'p:OutputPath={options.results_directory}',
+                    'nologo',
+                    'verbosity:quiet',
+                    'p:OutputDir=tests_output',
+                    f'p:Configuration={options.configuration}',
+                    f'p:Architecture={arch}')
                 if options.framework_ver_override:
                     params += self.build_params(f'p:TargetFrameworkVersion=v{options.framework_ver_override}')
             result = subprocess.call([self.builder, *params, self.path])
@@ -82,7 +90,7 @@ class NUnitTestSuite(object):
                     print('KILLING A DANGLING {} test process {}'.format(test_agent_name, proc.info['pid']))
                     os.kill(proc.info['pid'], signal.SIGTERM)
 
-    def run(self, options, run_id, iteration_index=1, suite_retry_index=0):
+    def run(self, options, iteration_index=1, suite_retry_index=0):
         # The iteration_index and suite_retry_index arguments are not implemented.
         # They exist for the sake of a uniform interface with robot_tests_provider.
         print('Running ' + self.path)
@@ -165,18 +173,15 @@ class NUnitTestSuite(object):
     def cleanup(self, options):
         pass
 
-
     def should_retry_suite(self, options, iteration_index, suite_retry_index):
         # Unused mechanism, this exists to keep a uniform interface with
         # robot_tests_provider.py.
         return False
 
-
     def tests_failed_due_to_renode_crash(self) -> bool:
         # Unused mechanism, this exists to keep a uniform interface with
         # robot_tests_provider.py.
         return False
-
 
     @staticmethod
     def find_failed_tests(path, files_pattern='*.csproj.xml'):
@@ -203,7 +208,6 @@ class NUnitTestSuite(object):
         if not ret['mandatory']:
             return None
         return ret
-
 
     @staticmethod
     def find_rerun_tests(path):

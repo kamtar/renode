@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2010-2018 Antmicro
+// Copyright (c) 2010-2025 Antmicro
 //
 // This file is licensed under the MIT License.
 // Full license text is available in 'licenses/MIT.txt'.
@@ -13,7 +13,7 @@ using System.Reflection;
 
 namespace Antmicro.Renode.PlatformDescription.Syntax
 {
-    public class Entry : IPositionAware<Entry>, IWithPosition, IPrefixable, IInitable
+    public class Entry : IPositionAware<Entry>, IWithPosition, IPrefixable, IScriptable
     {
         public Entry(string variableName, StringWithPosition type, IEnumerable<RegistrationInfo> registrationInfo, IEnumerable<Attribute> attributes, bool isLocal, StringWithPosition alias)
         {
@@ -87,6 +87,17 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
                 else if(ourInit != null)
                 {
                     mergedAttributes.Add(ourInit.Merge(theirInit));
+                }
+
+                var ourReset = Attributes.OfType<ResetAttribute>().SingleOrDefault();
+                var theirReset = entry.Attributes.OfType<ResetAttribute>().SingleOrDefault();
+                if(ourReset == null ^ theirReset == null)
+                {
+                    mergedAttributes.Add(ourReset ?? theirReset);
+                }
+                else if(ourReset != null)
+                {
+                    mergedAttributes.Add(ourReset.Merge(theirReset));
                 }
 
                 Attributes = mergedAttributes;

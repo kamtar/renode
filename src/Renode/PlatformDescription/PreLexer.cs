@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2010-2023 Antmicro
+// Copyright (c) 2010-2025 Antmicro
 //
 // This file is licensed under the MIT License.
 // Full license text is available in 'licenses/MIT.txt'.
@@ -146,7 +146,8 @@ finish:
                 }
                 while(true)
                 {
-                    switch(FindInLine(line, ref currentIndex))
+                    FindResult found;
+                    switch(found = FindInLine(line, ref currentIndex))
                     {
                     case FindResult.Nothing:
                         AccountBraceLevel(line, ref localBraceLevel);
@@ -158,16 +159,19 @@ finish:
                         yield return line;
                         goto next;
                     case FindResult.StringStart:
-                        currentIndex++;
+                    case FindResult.MultilineStringStart: // multiline strings are already rolled into one string containing \n here
+                        var delimiter = found == FindResult.StringStart ? StringDelimiter : MultilineStringDelimiter;
+                        currentIndex += delimiter.Length;
                         while(true)
                         {
-                            currentIndex = line.IndexOf('"', currentIndex) + 1;
-                            if(currentIndex == 0) // means that IndexOf returned -1
+                            var nextDelimiterIndex = line.IndexOf(delimiter, currentIndex);
+                            if(nextDelimiterIndex == -1)
                             {
                                 throw GetException(ParsingError.SyntaxError, lineNo, originalLine.Length - 1, originalLine, "Unterminated string.", path);
                             }
+                            currentIndex = nextDelimiterIndex + delimiter.Length;
                             // if this is escaped quote, just ignore it
-                            if(!IsEscapedPosition(line, currentIndex - 1))
+                            if(!IsEscapedPosition(line, nextDelimiterIndex))
                             {
                                 break;
                             }
@@ -215,6 +219,13 @@ finish:
                 {
                 case '"':
                     return FindResult.StringStart;
+                case '\'':
+                    if(line.Length >= currentIndex + MultilineStringDelimiter.Length && line.Substring(currentIndex, MultilineStringDelimiter.Length) == MultilineStringDelimiter)
+                    {
+                        currentIndex += MultilineStringDelimiter.Length;
+                        return FindResult.MultilineStringStart;
+                    }
+                    break;
                 case '/':
                     if(line.Length > currentIndex + 1)
                     {
@@ -240,17 +251,16 @@ finish:
 
         public static IEnumerable<string> HandleMultilineStrings(IEnumerable<string> sourceLine, string path)
         {
-            const string quoteDelimiter = "'''";
+            var multilineQuoteRegex = new Regex(MultilineStringDelimiter);
             var multilineString = new List<string>();
             var inMultilineString = false;
-            var regexCharacterToFind = new Regex(Regex.Escape(quoteDelimiter), RegexOptions.None);
             var openingQuoteLine = new Tuple<int, string, int>(-1, "", -1);
 
             foreach(var currentLine in sourceLine.Select((value, index) => new { index, value }))
             {
-                int lastQuoteIndex = -1;
                 var line = currentLine.value;
-                var validQuotes = CountUnescapedCharacters(line, regexCharacterToFind, out lastQuoteIndex);
+                var validQuotes = CountUnescapedCharacters(line, multilineQuoteRegex, out List<int> validQuotesIndexes);
+                var lastQuoteIndex = (validQuotesIndexes.Count != 0) ? validQuotesIndexes[validQuotesIndexes.Count - 1] : -1;
 
                 if(inMultilineString)
                 {
@@ -265,10 +275,15 @@ finish:
                 }
                 else
                 {
-                    if(validQuotes != 1) // we have opening and closing quote (or more) or no quotes at all
+                    if(validQuotes == 0 || validQuotes == 2) // no quotes at all or opening and closing quote
                     {
                         yield return line;
                         continue;
+                    }
+                    else if(validQuotes != 1) // invalid multiple quotes in line
+                    {
+                        throw GetException(ParsingError.SyntaxError, currentLine.index, validQuotesIndexes[2], line,
+                            "The start of one multiline string cannot be on the same line as the end of another", path);
                     }
                     openingQuoteLine = new Tuple<int, string, int>(currentLine.index, currentLine.value, lastQuoteIndex);
                     inMultilineString = true;
@@ -285,11 +300,11 @@ finish:
             }
         }
 
-        public static int CountUnescapedCharacters(string line, Regex regexCharacterToFind, out int lastQuoteIndex, char escapeCharacter = '\\')
+        public static int CountUnescapedCharacters(string line, Regex regexCharacterToFind, out List<int> validQuotesIndexes, char escapeCharacter = '\\')
         {
             var matches = regexCharacterToFind.Matches(line);
             var validQuotesCount = 0;
-            var validQuotesIndexes = new List<int>();
+            validQuotesIndexes = new List<int>();
 
             foreach(Match ma in matches)
             {
@@ -309,7 +324,6 @@ finish:
                     validQuotesIndexes.Add(startIndex);
                 }
             }
-            lastQuoteIndex = (validQuotesIndexes.Count != 0) ? validQuotesIndexes[validQuotesIndexes.Count - 1] : -1; 
             return validQuotesCount; 
         }
 
@@ -386,11 +400,14 @@ finish:
         }
 
         private const int SpacesPerIndent = 4;
+        private const string StringDelimiter = "\"";
+        private const string MultilineStringDelimiter = "'''";
 
         private enum FindResult
         {
             Nothing,
             StringStart,
+            MultilineStringStart,
             MultilineCommentStart,
             SingleLineCommentStart
         }

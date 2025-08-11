@@ -401,6 +401,7 @@ Locked MappedMemory Should Not Be Accessible From CPU
 Partial MappedMemory Locking Should Not Be Allowed With ICPUWithMappedMemory
     # CPU is important; partial MappedMemory locking isn't allowed only with ICPUWithMappedMemory.
     Create Machine With CPU And Two MappedMemory Peripherals
+    Create Log Tester             0
 
     ${mem1_size}  ${mem1_addr}  ${mem1_range}=  Get mem1 Size, Address And Range
     ${mem2_size}  ${mem2_addr}  ${mem2_range}=  Get mem2 Size, Address And Range
@@ -470,7 +471,7 @@ Symbols Should Be Dynamically Loaded and Unloaded On Request
     Execute Command                sysbus LoadELF ${bin}
     ${main_address_global}=        Execute Command  sysbus GetSymbolAddress ${main_symbol_name}
     Should Be Equal As Numbers     ${main_symbol_address}  ${main_address_global}
-    
+
     # Symbol lookup fallbacks to the global scope if the per-cpu lookup is not found
     ${main_address_local}=         Execute Command  sysbus GetSymbolAddress ${main_symbol_name} context=${cpu}
     Should Be Equal As Numbers     ${main_symbol_address}  ${main_address_local}
@@ -486,7 +487,7 @@ Symbols Should Be Dynamically Loaded and Unloaded On Request
     ...                            Execute Command   sysbus GetSymbolAddress ${main_symbol_name} context=${cpu}
     Run Keyword And Expect Error   *Could not find any address for symbol: main*
     ...                            Execute Command   sysbus GetSymbolAddress ${main_symbol_name}
-    
+
     # Load symbols in the local scope so they are visible only for the given cpu
     Execute Command                sysbus LoadSymbolsFrom ${bin} context=${cpu}
     ${main_address_local}=         Execute Command  sysbus GetSymbolAddress ${main_symbol_name} context=${cpu}

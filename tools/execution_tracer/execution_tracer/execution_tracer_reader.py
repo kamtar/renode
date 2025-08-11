@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import platform
 import sys
 import os
@@ -328,6 +329,7 @@ def handle_coverage(args, trace_data_per_file) -> None:
                     coverage_config,
                     args.coverview_config,
                     tests_as_total=args.tests_as_total,
+                    warning_threshold=args.warning_threshold,
                     remove_common_path_prefix=remove_common_path_prefix,
                 )
                 if not archive_created:
@@ -368,6 +370,7 @@ def main():
     cov_parser.add_argument("--lazy-line-cache", default=False, action="store_true", help="Disable line to address eager cache generation. For big programs, reduce memory usage, but process traces much slower")
     cov_parser.add_argument("--no-shorten-paths", default=False, action="store_true", help="Disable removing common path prefix from coverage output. Only relevant with '--export-for-coverview'")
     cov_parser.add_argument("--tests-as-total", default=False, action="store_true", help="Show executed tests out of total tests in line coverage in coverview. Only relevant with '--export-for-coverview'")
+    cov_parser.add_argument("--warning-threshold", required=False, help="Set warning threshold for line coverage in coverview. Only relevant with '--export-for-coverview'")
     args = parser.parse_args()
 
     # Look for the libllvm-disas library in default location
@@ -380,22 +383,29 @@ def main():
         else:
             ext = '.so'
 
-        lib_name = 'libllvm-disas' + ext
+        # In portable packages, the name does not contain 'aarch64', so handle both cases, trying the
+        # aarch64 version first.
+        lib_names = ['libllvm-disas' + ext]
+
+        if platform.uname().machine.lower() in ('arm64', 'aarch64'):
+            lib_names.insert(0, 'libllvm-disas-aarch64' + ext)
 
         lib_search_paths = [
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, "lib", "resources", "llvm"), 
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "lib", "resources", "llvm"),
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "bin"),
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir),
             os.path.dirname(os.path.realpath(__file__)), 
             os.getcwd()
         ]
 
-        for search_path in lib_search_paths:
+        for search_path, lib_name in itertools.product(lib_search_paths, lib_names):
             lib_path = os.path.join(search_path, lib_name)
             if os.path.isfile(lib_path):
                 args.llvm_disas_path = lib_path
                 break
 
         if args.llvm_disas_path is None:
-            raise FileNotFoundError('Could not find ' + lib_name + ' in any of the following locations: ' + ', '.join([os.path.abspath(path) for path in lib_search_paths]))
+            raise FileNotFoundError('Could not find ' + " or ".join(lib_names) + ' in any of the following locations: ' + ', '.join([os.path.abspath(path) for path in lib_search_paths]))
 
     try:
         with contextlib.ExitStack() as stack:
