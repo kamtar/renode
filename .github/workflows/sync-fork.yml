@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: true
+          submodules: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
@@ -84,12 +84,54 @@ jobs:
             echo "Continuing with submodule update..."
           fi
 
-      - name: Update renode-infrastructure submodule
+      - name: Initialize and update submodules
         run: |
+          # Initialize all submodules first
+          git submodule init
+
+          # Get list of all submodules except Infrastructure
+          SUBMODULES=$(git config --file .gitmodules --get-regexp path | awk '{ print $2 }' | grep -v "^src/Infrastructure$")
+
+          # Update non-Infrastructure submodules
+          for submodule in $SUBMODULES; do
+            echo "Updating submodule: $submodule"
+            git submodule update --init --recursive "$submodule" || {
+              echo "Warning: Failed to update $submodule, continuing..."
+            }
+          done
+
+          # Now handle the Infrastructure submodule specifically
+          echo "Handling Infrastructure submodule..."
+          
+          # Remove the directory if it exists but is not a proper git repository
+          if [ -d "src/Infrastructure" ] && [ ! -d "src/Infrastructure/.git" ]; then
+            echo "Removing incomplete Infrastructure directory..."
+            rm -rf src/Infrastructure
+          fi
+          
+          # Clone the Infrastructure submodule if it doesn't exist
+          if [ ! -d "src/Infrastructure/.git" ]; then
+            echo "Cloning Infrastructure submodule..."
+            git clone https://github.com/kamtar/renode-infrastructure.git src/Infrastructure
+          fi
+          
           cd src/Infrastructure
 
+          # Check if remote 'origin' exists and set it correctly
+          if git remote get-url origin >/dev/null 2>&1; then
+            echo "Updating remote URL..."
+            git remote set-url origin https://github.com/kamtar/renode-infrastructure.git
+          else
+            echo "Adding remote..."
+            git remote add origin https://github.com/kamtar/renode-infrastructure.git
+          fi
+
           # Fetch latest changes from kamtar/renode-infrastructure
-          git fetch origin
+          git fetch origin || {
+            echo "Error: Failed to fetch from kamtar/renode-infrastructure"
+            cd ../..
+            exit 1
+          }
 
           # Check which branch exists (master or main)
           BRANCH="master"
@@ -99,7 +141,7 @@ jobs:
 
           echo "Using branch: $BRANCH"
 
-          # Get the latest commit from the branch
+          # Checkout the latest commit from the branch (detached HEAD is intentional for submodules)
           git checkout origin/$BRANCH
           LATEST_COMMIT=$(git rev-parse HEAD)
           echo "Latest commit in renode-infrastructure: $LATEST_COMMIT"
