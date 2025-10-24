@@ -16,12 +16,15 @@ namespace Antmicro.Renode.Network.ExternalControl
         GetMachine,
         ADC,
         GPIOPort,
+        SystemBus,
     }
 
     public interface ICommand
     {
         Command Identifier { get; }
+
         byte Version { get; }
+
         IMachineContainer Machines { get; }
 
         Response Invoke(List<byte> data);
@@ -36,9 +39,11 @@ namespace Antmicro.Renode.Network.ExternalControl
 
         public abstract Response Invoke(List<byte> data);
 
-        public abstract Command Identifier { get; }
-        public abstract byte Version { get; }
         public IMachineContainer Machines => parent.Machines;
+
+        public abstract Command Identifier { get; }
+
+        public abstract byte Version { get; }
 
         protected readonly ExternalControlServer parent;
     }

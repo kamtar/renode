@@ -52,6 +52,7 @@ class NUnitTestSuite(object):
 
     def prepare(self, options):
         if not options.skip_building:
+            self._adjust_path(options)
             print("Building {0}".format(self.path))
             arch = 'arm' if machine() in ['aarch64', 'arm64'] else 'i386'
             if options.runner == 'dotnet':
@@ -80,6 +81,21 @@ class NUnitTestSuite(object):
             print('Skipping the build')
 
         return 0
+
+    def _adjust_path(self, options):
+        path, proj = os.path.split(self.path)
+        _match = (options.runner == 'dotnet', proj.endswith("_NET.csproj"))
+        if _match == (True, False):
+                proj_alt = proj[:-7] + "_NET.csproj"
+        elif _match == (False, True):
+                proj_alt = proj[:-11] + ".csproj"
+        else:
+                proj_alt = proj
+        if proj != proj_alt and os.path.exists(path_alt := os.path.join(path, proj_alt)):
+            print(f"{options.runner} runner detected, switching: {proj} -> {proj_alt}")
+            self.path = path_alt
+            return True
+        return False
 
     def _cleanup_dangling(self, process, proc_name, test_agent_name):
         for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -144,7 +160,11 @@ class NUnitTestSuite(object):
                 args.append('--where= ' + ' and '.join(['({})'.format(x) for x in where_conditions]))
 
         if options.run_gdb:
-            args = ['gdb', '-ex', 'handle SIGXCPU SIG33 SIG35 SIG36 SIGPWR nostop noprint', '--args'] + args
+            if options.runner == 'dotnet':
+                signals_to_handle = 'SIG34'
+            else:
+                signals_to_handle = 'SIGXCPU SIG33 SIG35 SIG36 SIGPWR'
+            command = ['gdb', '-nx', '-ex', 'handle ' + signals_to_handle + ' nostop noprint', '--args'] + args
 
         startTimestamp = monotonic()
         if options.runner == 'dotnet':

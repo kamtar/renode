@@ -1,7 +1,7 @@
 *** Variables ***
 ${UART}                       sysbus.uart
-${SCRIPT_BIOS}                @scripts/single-node/i386-kvm-bios.resc
-${SCRIPT_LINUX}               @scripts/single-node/i386-kvm-linux.resc
+${SCRIPT_BIOS}                @scripts/single-node/x86-kvm-bios.resc
+${SCRIPT_LINUX}               @scripts/single-node/x86-kvm-linux.resc
 
 *** Test Cases ***
 Should Run SeaBIOS
@@ -13,7 +13,6 @@ Should Run SeaBIOS
 Should Run Linux
     [Tags]                    skip_windows  skip_osx  skip_host_arm
     Execute Command           include ${SCRIPT_LINUX}
-    Execute Command           showAnalyzer sysbus.uart
     Create Terminal Tester    sysbus.uart  defaultPauseEmulation=true
     Wait For Prompt On Uart   buildroot login:
     Write Line To Uart        root

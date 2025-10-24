@@ -1,3 +1,6 @@
+*** Settings ***
+Library                             nucleo_h753zi_helpers.py
+
 *** Variables ***
 ${UART}                             sysbus.usart3
 
@@ -8,11 +11,14 @@ ${BLINKY}                           ${PROJECT_URL}/zephyr--nucleo-h753zi-blinky.
 ${BUTTON}                           ${PROJECT_URL}/zephyr--nucleo_h753zi_button_sample.elf-s_582696-3d5e6775a24c75e8fff6b812d5bc850b361e3d93
 ${CRYPTO_GCM}                       ${PROJECT_URL}/stm32cubeh7--stm32h753zi-CRYP_AESGCM.elf-s_2136368-45a90683e4f954667a464fc8fa9ce57d0b74ac09
 ${CRYPTO_GCM_IT}                    ${PROJECT_URL}/stm32cubeh7--stm32h753zi-CRYP_AESGCM_IT.elf-s_2137876-ee038aa93bf68cb91af9894e0be9584eec3057e5
+${CRYPTO_AES_DMA}                   ${PROJECT_URL}/stm32cubeh7--stm32h753zi-CRYP_AESModes_DMA.elf-s_2152168-edf19388077bb230a242d2dfc7392ea881f29051
 ${QSPI_RW}                          ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_ReadWrite_IT.elf-s_2146460-5c6870c2698fe33a9ef78ce791d9e83439328cc4
 ${QSPI_MemMapped}                   ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_MemoryMapped.elf-s_2152312-faec8bb984c61aabb52ae9eec1598999ea906a1c
 ${QSPI_XIP}                         ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_ExecuteInPlace.elf-s_2233412-67befe44572c483b242a95ce8e714f75f4e7dc69
+${PTP}                              ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_net_ptp.elf-s_4678660-79097838e7a15377e3d9ce083917220bd0705312
+${FLASH_EraseProgram}               ${PROJECT_URL}/stm32cubeh7--stm32h753zi-FLASH_EraseProgram.elf-s_2098720-fdf4d20c82c0619eee844117860017b477696298
 
-${PLATFORM}                         @platforms/boards/nucleo_h753zi.repl
+${PLATFORM}                         platforms/boards/nucleo_h753zi.repl
 
 ${EVAL_STUB}=    SEPARATOR=
 ...  """                                                                  ${\n}
@@ -33,6 +39,11 @@ ${EXTERNAL_FLASH}=   SEPARATOR=
 ...    qspiMappedFlashMemory: Memory.MappedMemory @ sysbus 0x90000000 { size: 0x10000000 }  ${\n}
 ...    """
 
+${PTP_PLATFORM}=    SEPARATOR=${\n}
+...    using "${PLATFORM}"
+...    nvic:
+...    ${SPACE*4}systickFrequency: 480000000  # Set frequency to match what software expects
+
 *** Keywords ***
 Create Setup
     Execute Command                 emulation CreateSwitch "switch"
@@ -47,8 +58,14 @@ Create Machine
 
     Execute Command                 mach add "${name}"
     Execute Command                 mach set "${name}"
-    Execute Command                 machine LoadPlatformDescription ${PLATFORM}
+    Execute Command                 machine LoadPlatformDescription @${PLATFORM}
 
+    Execute Command                 sysbus LoadELF @${elf}
+
+Create PTP Machine
+    [Arguments]                     ${elf}  ${name}
+    Execute Command                 mach create "${name}"
+    Execute Command                 machine LoadPlatformDescriptionFromString """${PTP_PLATFORM}"""
     Execute Command                 sysbus LoadELF @${elf}
 
 Assert PC Equals
@@ -215,3 +232,65 @@ Should Program Flash With QSPI and use XIP
     Execute Command                 emulation RunFor "00:00:00.01"
     # QSPI memory starts at:        0x90000000
     Assert PC Equals                0x90000010
+
+Should Read Correct Time From the PTP Clock
+    Create PTP Machine              ${PTP}  ptp
+    Create Terminal Tester          ${UART}  defaultPauseEmulation=True
+    # Use AdvanceImmediately to make the RunFor take less real time
+    Execute Command                 emulation SetGlobalAdvanceImmediately true
+
+    Wait For Line On Uart           ptp_port: ptp_port_init: Port 1 initialized
+    Wait For Prompt On Uart         uart:~$
+    Write Line To Uart              ptp_clock set PTP_CLOCK 25
+    Write Line To Uart              ptp_clock get PTP_CLOCK
+    Wait For Line On Uart           25.00
+    Execute Command                 emulation RunFor "7.48s"
+    Write Line To Uart              ptp_clock get PTP_CLOCK
+    Wait For Line On Uart           32.48
+
+Should Transmit PTP Frames
+    Create PTP Machine              ${PTP}  ptp
+    Create Terminal Tester          ${UART}  defaultPauseEmulation=True
+    Create Network Interface Tester  sysbus.ethernet
+
+    Wait For Line On Uart           ptp_port: ptp_port_init: Port 1 initialized
+
+    Start Emulation
+
+    FOR  ${i}  IN RANGE  0  3
+        # Wait for a PTP Sync message over UDP from 192.0.2.1:319 to 224.0.1.129:319
+        Wait For Outgoing Packet With Bytes At Index  0800__________________11____C0000201E0000181013F013F________0012  12  5  10
+        # Wait for a PTP Follow_Up message over UDP from 192.0.2.1:320 to 224.0.1.129:320 - which should be the next transmitted packet
+        ${follow_up}=                   Wait For Outgoing Packet With Bytes At Index  0800__________________11____C0000201E000018101400140________0812  12  1  1
+
+        ${packet_seconds}=              Extract Int From Bytes  ${follow_up.Bytes}  76  count=6
+        ${packet_nanoseconds}=          Extract Int From Bytes  ${follow_up.Bytes}  82  count=4
+        ${packet_milliseconds}=         Evaluate  (${packet_seconds} * 10**9 + ${packet_nanoseconds}) / 10**6
+
+        # Emulation time and the packet timestamp should be within 100ms of one another (100ms is to account for board initialization)
+        Should Be True                  abs(${packet_milliseconds} - ${follow_up.Timestamp}) < 100
+    END
+
+Should Encrypt And Decrypt Using DMA
+    Create Machine                      ${CRYPTO_AES_DMA}  crypt
+    Execute Command                     machine LoadPlatformDescriptionFromString ${EVAL_STUB}
+
+    ${led3_tester}=                     Create LED Tester   sysbus.gpioPortA.led3     defaultTimeout=1
+    ${led1_tester}=                     Create LED Tester   sysbus.gpioPortF.led1     defaultTimeout=1
+
+    # LED3 would be set if at any point of the test a failure occurred
+    # LED1 is set at the very end of the test, when the entire procedure is complete with no failures
+    Assert LED State                    false    testerId=${led3_tester}
+    Assert LED State                    true     testerId=${led1_tester}
+
+Should Erase And Program Flash Memory
+    Create Machine                      ${FLASH_EraseProgram}  flash
+    Execute Command                     machine LoadPlatformDescriptionFromString ${EVAL_STUB}
+
+    ${led3_tester}=                     Create LED Tester   sysbus.gpioPortA.led3     defaultTimeout=1
+    ${led1_tester}=                     Create LED Tester   sysbus.gpioPortF.led1     defaultTimeout=1
+
+    # LED3 would be set if at any point of the test a failure occurred
+    # LED1 is set at the very end of the test, when the entire procedure is complete with no failures
+    Assert LED State                    false    testerId=${led3_tester}
+    Assert LED State                    true     testerId=${led1_tester}

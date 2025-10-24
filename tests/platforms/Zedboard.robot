@@ -151,7 +151,7 @@ Get Linux Elapsed Seconds
     ${date}=                        Wait For Line On Uart  ^([0-9]+)$  treatAsRegex=true
     Wait For Prompt On Uart         ${PROMPT}
     Check Exit Code
-    ${seconds}=                     Convert To Integer  ${date.line}
+    ${seconds}=                     Convert To Integer  ${date.Line}
     RETURN                          ${seconds}
 
 Generate Random File
@@ -223,6 +223,7 @@ Map Index To Disk Letter
 
 *** Test Cases ***
 Should Boot And Login
+    [Tags]                          basic-tests
     ${UART}=                        Create Machine
     Start Emulation
 
@@ -356,6 +357,7 @@ Should Access SPI Flash Memory Via Additional Cadence xSPI IP With The Auto Comm
     Should Access SPI Flash Memory Via Additional Cadence xSPI 
 
 Should Boot And Login With UFS
+    [Tags]                          basic-tests
     Execute Command                 $bin=${ZYNQ_UFS_BIN}
     Execute Command                 $rootfs=${ZYNQ_UFS_ROOTFS}
     Execute Command                 $dtb=${ZYNQ_UFS_DTB}
@@ -513,7 +515,7 @@ Should Ping
     Wait For Prompt On Uart         ${PROMPT}  testerId=${tester1}
 
 Should Ping Over TAP
-    [Tags]                          ethernet  tap
+    [Tags]                          ethernet  tap  basic-tests
     Requires                        logged-in
 
     Set Test Variable               ${TAP_INTERFACE}  tap0

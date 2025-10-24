@@ -4,15 +4,15 @@
 // This file is licensed under the MIT License.
 // Full license text is available in 'licenses/MIT.txt'.
 //
-using System.Threading;
-using Antmicro.Renode;
-using Antmicro.Renode.UI;
-using System.Reflection;
-using System.IO;
 using System;
-using Antmicro.Renode.Utilities;
-using Antmicro.Renode.RobotFramework;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+
 using Antmicro.Renode.Logging;
+using Antmicro.Renode.RobotFramework;
+using Antmicro.Renode.UI;
+using Antmicro.Renode.Utilities;
 
 namespace Antmicro.Renode
 {
@@ -26,7 +26,7 @@ namespace Antmicro.Renode
             var options = new Options();
             var optionsParser = new OptionsParser.OptionsParser();
             var optionsParsed = optionsParser.Parse(options, args);
-            if (!optionsParsed)
+            if(!optionsParsed)
             {
                 return;
             }
@@ -45,6 +45,20 @@ namespace Antmicro.Renode
             */
             Core.EmulationManager.RebuildInstance();
 
+#if NET
+            if(options.ServerMode)
+            {
+                if(!WebSockets.WebSocketsManager.Instance.Start(options.ServerModePort))
+                {
+                    string reason = options.ServerModePort != 21234 ? $"specified port ({options.ServerModePort}) is unavailable" : "port range (21234 - 31234) is unavailable";
+                    Console.Out.WriteLine($"[ERROR] Couldn't launch server - {reason}");
+                    return;
+                }
+
+                Emulator.BeforeExit += WebSockets.WebSocketsManager.Instance.Dispose;
+            }
+#endif
+
             var thread = new Thread(() =>
             {
                 try
@@ -59,6 +73,14 @@ namespace Antmicro.Renode
                                 context.RegisterSurrogate(typeof(RobotFrameworkEngine), rf);
                                 rf.Start(options.RobotFrameworkRemoteServerPort);
                             }
+#if NET
+                            if(options.ServerMode)
+                            {
+                                var wsAPI = new WebSockets.WebSocketAPI(options.ServerModeWorkDir);
+                                Emulator.BeforeExit += wsAPI.Dispose;
+                                wsAPI.Start();
+                            }
+#endif
                         });
                     }
                 }

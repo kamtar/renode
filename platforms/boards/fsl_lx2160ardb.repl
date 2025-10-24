@@ -27,7 +27,7 @@ gic: IRQControllers.ARM_GenericInterruptController @ {
         sysbus new Bus.BusMultiRegistration { address: 0x6000000; size: 0x010000; region: "distributor" };
         sysbus new IRQControllers.ArmGicRedistributorRegistration { attachedCPU: cpu0; address: 0x6200000 }
     }
-    architectureVersion: IRQControllers.ARM_GenericInterruptControllerVersion.GICv3
+    architectureVersion: .GICv3
     supportsTwoSecurityStates: true
     // GIC -> ARM CPU interrupt connections are generated automatically
 
@@ -52,14 +52,14 @@ ccn508: Python.PythonPeripheral @ {
     size: 0x4
     initable: true
     script: '''
-if request.isInit:
+if request.IsInit:
     lastVal = 0
 else:
     lastVal = 1 - lastVal
 if lastVal == 0:
-    request.value = 0x4
+    request.Value = 0x4
 else:
-    request.value = 0xC
+    request.Value = 0xC
 '''
 
 sysbus:

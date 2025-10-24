@@ -29,6 +29,7 @@ ${BUTTON_REPL}                      SEPARATOR=\n
 Prepare Machine
     [Arguments]                     ${elf}
     Execute Command                 mach create "Renesas RZ/G2L"
+    Execute Command                 using sysbus.cluster
     Execute Command                 machine LoadPlatformDescription @platforms/cpus/renesas_rz_g2l.repl
     Execute Command                 macro reset "cpu0 IsHalted true; cpu1 IsHalted true; sysbus LoadELF @${elf} cpu=cpu_m33"
     Execute Command                 runMacro $reset
@@ -49,6 +50,11 @@ Elapsed Time Equals
 Prepare LED Tester
     Execute Command                 machine LoadPlatformDescriptionFromString ${LED_REPL}
     Create Led Tester               sysbus.gpio.led
+
+Execute Linux Command
+    [Arguments]                     ${command}
+    Write Line To Uart              ${command}  waitForEcho=false
+    Wait For Prompt On Uart         root@smarc-rzg2l:~#  timeout=600
 
 *** Test Cases ***
 Should Run The Timer In One Shot Mode
@@ -75,7 +81,7 @@ Should Run GTM Sample
     Wait For Prompt On Uart         Enter any key to start or stop the timers
     ${one_shot_start}=              Write Line To Uart  waitForEcho=false
     ${one_shot_end}=                Wait For Line On Uart  One-shot mode GTM timer elapsed
-    Elapsed Time Equals             ${one_shot_start.timestamp}  ${one_shot_end.timestamp}  10
+    Elapsed Time Equals             ${one_shot_start.Timestamp}  ${one_shot_end.Timestamp}  10
 
     Wait For Line On Uart           GTM1 is Enabled in Periodic mode
     FOR  ${i}  IN RANGE  0  3
@@ -84,7 +90,7 @@ Should Run GTM Sample
 
         ${periodic_end}=                Wait For Line On Uart  Leds are: On
         Assert Led State                True  timeout=0.01
-        Elapsed Time Equals             ${periodic_start.timestamp}  ${periodic_end.timestamp}  5  0.3
+        Elapsed Time Equals             ${periodic_start.Timestamp}  ${periodic_end.Timestamp}  5  0.3
     END
 
 Should Run SCIF UART Sample
@@ -172,7 +178,7 @@ Should Copy Memory With DMA
 
     Execute Command                 mach create "Renesas RZ/G2L"
     Execute Command                 machine LoadPlatformDescription @platforms/cpus/renesas_rz_g2l.repl
-    Execute Command                 cluster IsHalted true
+    Execute Command                 cluster ForEach IsHalted true
 
     Execute Command                 sysbus WriteDoubleWord ${source} ${expected_value} cpu_m33
     Execute Command                 cpu_m33 SetRegister 0 ${channel_base}  # DMA Channel address
@@ -269,3 +275,27 @@ Should Run Zephyr Shell Module Sample
     Wait For Prompt On Uart         uart:~$
     Write Line To Uart              demo board
     Wait For Line On Uart           rzg2l_smarc
+
+Should Run OpenAMP Echo Sample
+    Execute Command                 include @scripts/single-node/rzg2l_openamp.resc
+
+    #Can set defaultPauseEmulation=true when #84075 is fixed (but it will cost around a minute in test duration)
+    Create Terminal Tester          sysbus.scif0  defaultPauseEmulation=false
+    Execute Command                 showAnalyzer sysbus.scif0
+
+    Wait For Prompt On Uart         smarc-rzg2l login:  timeout=900
+    Execute Linux Command           root
+    Execute Linux Command           echo rzg2l_cm33_rpmsg_linux-rtos_demo.elf > /sys/class/remoteproc/remoteproc0/firmware
+    Execute Linux Command           echo start > /sys/class/remoteproc/remoteproc0/state
+    Write Line To Uart              rpmsg_sample_client
+    Wait For Line On Uart           please input
+    Wait For Line On Uart           >  includeUnfinishedLine=true
+    Write Line To Uart              1
+
+    FOR  ${i}  IN RANGE  0  471
+        Wait For Line On Uart           sending payload number ${i} of size ${i + 17}
+        Wait For Line On Uart           echo test: sent : ${i + 17}
+        Wait For Line On Uart           received payload number ${i} of size ${i + 17}
+    END
+    Wait For Line On Uart           Test Results: Error count = 0
+

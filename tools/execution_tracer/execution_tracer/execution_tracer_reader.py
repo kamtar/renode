@@ -39,6 +39,7 @@ class AdditionalDataType(Enum):
     Empty = 0
     MemoryAccess = 1
     RiscVVectorConfiguration = 2
+    RiscVAtomicInstruction = 3
 
 
 class MemoryAccessType(Enum):
@@ -47,6 +48,25 @@ class MemoryAccessType(Enum):
     MemoryRead = 2
     MemoryWrite = 3
     InsnFetch = 4
+
+class RiscVAtomicInstruction(Enum):
+    ADD = 0x00
+    SWAP = 0x01
+    LR = 0x02
+    SC = 0x03
+    XOR = 0x04
+    CAS = 0x05
+    AND = 0x0C
+    OR = 0x08
+    MIN = 0x10
+    MAX = 0x14
+    MINU = 0x18
+    MAXU = 0x1C
+
+class RiscVAtomicInstructionWidth(Enum):
+    Word = 0x2
+    DoubleWord = 0x3
+    QuadWord = 0x4
 
 @dataclass()
 class Header:
@@ -197,6 +217,8 @@ class TraceData:
                 additional_data.append(self.parse_memory_access_data())
             elif additional_data_type is AdditionalDataType.RiscVVectorConfiguration:
                 additional_data.append(self.parse_riscv_vector_configuration_data())
+            elif additional_data_type is AdditionalDataType.RiscVAtomicInstruction:
+                additional_data.append(self.parse_riscv_atomic_instruction_data())
 
             try:
                 additional_data_type = AdditionalDataType(self.file.read(1)[0])
@@ -226,6 +248,41 @@ class TraceData:
         vl = bytes_to_hex(data[0:8], zero_padded=False)
         vtype = bytes_to_hex(data[8:16], zero_padded=False)
         return f"Vector configured to VL: {vl}, VTYPE: {vtype}"
+
+    def parse_riscv_atomic_instruction_data(self) -> str:
+        is_after_execution_raw = self.file.read(1)
+        width_raw = self.file.read(1)
+        instruction_raw = self.file.read(1)
+        if (
+            len(is_after_execution_raw) != 1
+            or len(width_raw) != 1
+            or len(instruction_raw) != 1
+        ):
+            raise InvalidFileFormatException("Invalid RISC-V atomic instruction data")
+
+        word_size = 0
+        width = RiscVAtomicInstructionWidth(width_raw[0])
+        if width == RiscVAtomicInstructionWidth.Word:
+            word_size = 4
+        if width == RiscVAtomicInstructionWidth.DoubleWord:
+            word_size = 8
+        if width == RiscVAtomicInstructionWidth.QuadWord:
+            raise InvalidFileFormatException("Support for QuadWord atomic operands not yet implemented")
+
+        data_size = 4 * word_size
+        data = self.file.read(data_size)
+        if len(data) != data_size:
+            raise InvalidFileFormatException("Unexpected end of file")
+
+        rd = bytes_to_hex(data[0 * word_size:1 * word_size], zero_padded=False)
+        rs1 = bytes_to_hex(data[1 * word_size:2 * word_size], zero_padded=False)
+        rs2 = bytes_to_hex(data[2 * word_size:3 * word_size], zero_padded=False)
+        memory_value = bytes_to_hex(data[3 * word_size:4 * word_size], zero_padded=False)
+
+        is_after_execution = is_after_execution_raw[0]
+
+        prePostText = "after" if is_after_execution else "before"
+        return f"AMO operands {prePostText} - RD: {rd}, RS1: {rs1} (memory value: {memory_value}), RS2: {rs2}"
 
     def format_entry(self, entry: TraceEntry) -> str:
         (pc, opcode, additional_data, isa_mode) = entry
@@ -342,6 +399,43 @@ def handle_coverage(args, trace_data_per_file) -> None:
             print(line)
 
 
+def find_llvm_disas() -> str:
+    p = platform.system()
+    if p == 'Darwin':
+        ext = '.dylib'
+    elif p == 'Windows':
+        ext = '.dll'
+    else:
+        ext = '.so'
+
+    # In portable packages, the name does not contain 'aarch64', so handle both cases, trying the
+    # aarch64 version first.
+    lib_names = ['libllvm-disas' + ext]
+
+    if platform.uname().machine.lower() in ('arm64', 'aarch64'):
+        lib_names.insert(0, 'libllvm-disas-aarch64' + ext)
+
+    lib_search_paths = [
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "lib", "resources", "llvm"),
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "bin"),
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir),
+        os.path.dirname(os.path.realpath(__file__)), 
+        os.getcwd()
+    ]
+
+    llvm_disas_path = None
+
+    for search_path, lib_name in itertools.product(lib_search_paths, lib_names):
+        lib_path = os.path.join(search_path, lib_name)
+        if os.path.isfile(lib_path):
+            llvm_disas_path = lib_path
+            break
+
+    if llvm_disas_path is None:
+        raise FileNotFoundError('Could not find ' + " or ".join(lib_names) + ' in any of the following locations: ' + ', '.join([os.path.abspath(path) for path in lib_search_paths]))
+    
+    return llvm_disas_path
+
 def main():
     parser = argparse.ArgumentParser(description="Renode's ExecutionTracer binary format reader")
     parser.add_argument("--debug", default=False, action="store_true", help="enable additional debug logs to stdout")
@@ -375,37 +469,7 @@ def main():
 
     # Look for the libllvm-disas library in default location
     if args.subcommands == 'inspect' and args.disassemble and args.llvm_disas_path is None:
-        p = platform.system()
-        if p == 'Darwin':
-            ext = '.dylib'
-        elif p == 'Windows':
-            ext = '.dll'
-        else:
-            ext = '.so'
-
-        # In portable packages, the name does not contain 'aarch64', so handle both cases, trying the
-        # aarch64 version first.
-        lib_names = ['libllvm-disas' + ext]
-
-        if platform.uname().machine.lower() in ('arm64', 'aarch64'):
-            lib_names.insert(0, 'libllvm-disas-aarch64' + ext)
-
-        lib_search_paths = [
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "lib", "resources", "llvm"),
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir, "bin"),
-            os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, os.pardir),
-            os.path.dirname(os.path.realpath(__file__)), 
-            os.getcwd()
-        ]
-
-        for search_path, lib_name in itertools.product(lib_search_paths, lib_names):
-            lib_path = os.path.join(search_path, lib_name)
-            if os.path.isfile(lib_path):
-                args.llvm_disas_path = lib_path
-                break
-
-        if args.llvm_disas_path is None:
-            raise FileNotFoundError('Could not find ' + " or ".join(lib_names) + ' in any of the following locations: ' + ', '.join([os.path.abspath(path) for path in lib_search_paths]))
+        args.llvm_disas_path = find_llvm_disas()
 
     try:
         with contextlib.ExitStack() as stack:

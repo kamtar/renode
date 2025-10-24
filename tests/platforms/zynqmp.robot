@@ -1,3 +1,6 @@
+*** Settings ***
+Library                                         tap_helper.py    # used for 'Preconfigure Macos' keyword
+
 *** Variables ***
 ${LINUX_UART}                                   sysbus.uart1
 ${UBOOT_UART}                                   sysbus.uart1
@@ -55,6 +58,10 @@ Create Linux Docker Machine
 Create Linux 32-Bit Userspace Machine
     Execute Command                 $rootfs=${LINUX_32BIT_ROOTFS}
     Create Linux Machine
+
+Create Linux SMMUv3 Machine
+    Execute Command                 include @scripts/single-node/zynqmp_smmuv3.resc
+    ${linux_tester}=                Create Terminal Tester          ${OPENAMP_UART}  defaultPauseEmulation=true
 
 Create Zephyr Machine
     [Arguments]                     ${elf}  ${uart}=${ZEPHYR_UART}
@@ -114,6 +121,30 @@ Should Boot And Login
     # Check if we see the other CPUs
     Write Line To Uart              nproc
     Wait For Line On Uart           4
+
+    Provides                        linux-shell
+
+Test Dirty Addresses Reduction
+    [Tags]                          skip_host_arm
+    Requires                        linux-shell
+    Execute Command                 showAnalyzer uart1
+
+    # The log below is on a Debug level and can come from any APU core.
+    Create Log Tester               0
+    Execute Command                 logLevel 0 cluster0.apu0
+    Execute Command                 logLevel 0 cluster0.apu1
+    Execute Command                 logLevel 0 cluster0.apu2
+    Execute Command                 logLevel 0 cluster0.apu3
+
+    Wait For Prompt On Uart         \#
+    Write Line To Uart              du -sh /*
+    Wait For Prompt On Uart         \#
+
+    # No such log should be triggered by `du`. If the reduction logic is incorrectly waiting for RPU cores
+    # to fetch dirty addresses, then the list has more than 60k addresses after boot and `du` adds 200k+
+    # more. This results in two failed reduction log entries (128k and 256k) which won't be present if the
+    # reduction logic works correctly.
+    Should Not Be In Log            Attempted reduction of arm64 dirty addresses list failed
 
 Should Detect I2C Peripherals
     Create Linux Machine
@@ -212,7 +243,7 @@ Should Support RTC
     ${h}=                           Wait For Line On Uart  Thu Jan${SPACE*2}1 00:00:(\\d+) 1970${SPACE*2}0.000000 seconds  treatAsRegex=true
 
     # Allow for 1 second of difference between the hwclock and the kernel's view
-    ${diff}=                        Evaluate  abs(int(${d.groups[0]}) - int(${h.groups[0]}))
+    ${diff}=                        Evaluate  abs(int(${d.Groups[0]}) - int(${h.Groups[0]}))
     Should Be True                  ${diff} <= 1
 
 Should Display Output on GPIO
@@ -610,3 +641,27 @@ Should Run Web Server In Docker
 
     Execute Linux Command Non Blocking      docker logs webserver
     Wait For Line On Uart                   response:200
+
+Should Ping Over TAP Using An Ethernet Adapter Behind The SMMUv3
+    [Tags]                                  tap
+    Create Linux SMMUv3 Machine
+    Boot Linux And Login
+
+    # Prepare TAP
+    Set Test Variable                       ${TAP_INTERFACE}  tap0
+    Set Test Variable                       ${TAP_INTERFACE_IP}  192.0.2.1
+    Set Test Variable                       ${SERVER_IP}  192.0.2.2
+
+    Execute Command                         emulation CreateSwitch "switch"
+    Execute Command                         emulation CreateTap "${TAP_INTERFACE}" "tap"
+
+    Preconfigure Macos                      tap0  ${TAP_INTERFACE_IP}  255.255.255.0
+    Network Interface Should Have Address   ${TAP_INTERFACE}  ${TAP_INTERFACE_IP}
+
+    Execute Command                         connector Connect host.tap switch
+    Execute Command                         connector Connect gem3 switch
+
+    Execute Linux Command                   ifconfig eth0 up ${SERVER_IP}
+
+    Write Line To Uart                      ping -c 5 ${TAP_INTERFACE_IP}
+    Wait For Line On Uart                   5 packets transmitted, 5 packets received, 0% packet loss

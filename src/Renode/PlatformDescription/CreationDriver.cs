@@ -5,23 +5,25 @@
 // Full license text is available in 'licenses/MIT.txt'.
 //
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Core.Structure;
 using Antmicro.Renode.Exceptions;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
-using Antmicro.Renode.Peripherals.CPU;
 using Antmicro.Renode.Peripherals.Miscellaneous;
 using Antmicro.Renode.PlatformDescription.Syntax;
 using Antmicro.Renode.Utilities;
 using Antmicro.Renode.Utilities.Collections;
+
 using Sprache;
 
 using Range = Antmicro.Renode.Core.Range;
@@ -61,6 +63,38 @@ namespace Antmicro.Renode.PlatformDescription
             var source = File.ReadAllText(path);
             usingsBeingProcessed.Push(Path.GetFullPath(path)); // don't need to pop since stack is cleared within ProcessInner
             ProcessInner(path, source);
+        }
+
+        private static string GetTypeListing(Type[] typesToAssign)
+        {
+            return typesToAssign.Length == 1 ? string.Format("type '{0}'", typesToAssign[0])
+                                                   : "possible types " + typesToAssign.Select(x => string.Format("'{0}'", x.Name)).Aggregate((x, y) => x + ", " + y);
+        }
+
+        private static string GetFriendlyConstructorName(ConstructorInfo ctor)
+        {
+            var parameters = ctor.GetParameters();
+            if(parameters.Length == 0)
+            {
+                return string.Format("{0} with no parameters", ctor.DeclaringType);
+            }
+            return string.Format("{0} with the following parameters: [{1}]", ctor.DeclaringType, parameters.Select(x => x.ParameterType + (x.HasDefaultValue ? " (optional)" : ""))
+                                 .Aggregate((x, y) => x + ", " + y));
+        }
+
+        private static IEnumerable<PropertyInfo> GetGpioProperties(Type type)
+        {
+            return type.GetProperties(BindingFlags.Public | BindingFlags.Instance).Where(x => typeof(GPIO).IsAssignableFrom(x.PropertyType));
+        }
+
+        private static string GetValidEnumValues(Type expectedType)
+        {
+            var validValues = new StringBuilder();
+            foreach(var field in Enum.GetValues(expectedType))
+            {
+                validValues.AppendLine($"       {expectedType.Name}.{field},");
+            }
+            return validValues.ToString();
         }
 
         private void ProcessVariableDeclarations(Description description, string prefix)
@@ -192,7 +226,20 @@ namespace Antmicro.Renode.PlatformDescription
                 var entriesToRegister = sortedForRegistration.Where(x => x.RegistrationInfos != null);
                 do
                 {
+                    var numberOfEntriesToRegisterBefore = entriesToRegister.Count();
                     entriesToRegister = RegisterFromEntries(entriesToRegister);
+                    var numberOfEntriesToRegisterAfter = entriesToRegister.Count();
+                    if(numberOfEntriesToRegisterBefore != 0 && numberOfEntriesToRegisterBefore == numberOfEntriesToRegisterAfter)
+                    {
+                        // If there was no progress, it must have been due to 'AreAllParentsRegistered' returning false
+                        // and up to that point backtraced methods between 'AreAllParentsRegistered' and 'RegisterFromEntries'
+                        // are re-entrant so deadlock can't be resolved by retrying with the same collection of entries.
+                        var entry = entriesToRegister.First();
+                        var registrationInfoRegisters = entry.RegistrationInfos.Select(x => $"'{x.Register.Value}'");
+                        HandleError(ParsingError.RegistrationException, entry,
+                                string.Format("Unable to finish the registration of '{0}'. Are all parents: {1}, registered?",
+                                              entry.VariableName, Misc.PrettyPrintCollection<string>(registrationInfoRegisters)), false);
+                    }
                 } while(entriesToRegister.Any());
 
                 while(objectValueInitQueue.Count > 0)
@@ -817,7 +864,7 @@ namespace Antmicro.Renode.PlatformDescription
                     else
                     {
                         // any manual irq connection should remove all automatic connections
-                        if (objectToSetOn is IHasAutomaticallyConnectedGPIOOutputs objectWithAutomaticConnections)
+                        if(objectToSetOn is IHasAutomaticallyConnectedGPIOOutputs objectWithAutomaticConnections)
                         {
                             objectWithAutomaticConnections.DisconnectAutomaticallyConnectedGPIOOutputs();
                         }
@@ -854,12 +901,12 @@ namespace Antmicro.Renode.PlatformDescription
                     {
                         // Connect the first one to the old destination
                         var combiner = combinerConnection.Combiner;
-                        if(combinerConnection.nextConnectionIndex == 0)
+                        if(combinerConnection.NextConnectionIndex == 0)
                         {
                             combiner.OutputLine.Connect(destinationReceiver, index);
                         }
                         destinationReceiver = combiner;
-                        index = combinerConnection.nextConnectionIndex++;
+                        index = combinerConnection.NextConnectionIndex++;
                     }
 
                     source.Connect(destinationReceiver, index);
@@ -1119,7 +1166,6 @@ namespace Antmicro.Renode.PlatformDescription
                         var gpioProperties = GetGpioProperties(objectType).ToArray();
                         if(gpioProperties.Length == 0)
                         {
-
                             HandleError(ParsingError.IrqSourceDoesNotExist, irqAttribute,
                                         string.Format("Type '{0}' does not contain any property of type GPIO.", objectType), false);
                         }
@@ -1323,7 +1369,7 @@ namespace Antmicro.Renode.PlatformDescription
             }
         }
 
-        private ConversionResult TryConvertSimplestValue<T>(Value value, Type expectedType, Type comparedType, string typeName, ref object result) where T : Value, ISimplestValue
+        private ConversionResult TryConvertSimplestValue<T>(Value value, Type expectedType, Type comparedType, ref object result) where T : Value, ISimplestValue
         {
             var tValue = value as T;
             if(tValue == null)
@@ -1366,6 +1412,38 @@ namespace Antmicro.Renode.PlatformDescription
             return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.TypeMismatch, string.Format(TypeMismatchMessage, expectedType));
         }
 
+        private ConversionResult TryConvertListValue(Value value, Type expectedType, ref object result)
+        {
+            if(!(value is ListValue listValue))
+            {
+                return ConversionResult.ConversionNotApplied;
+            }
+            var elementType = expectedType.GetEnumerableElementType();
+            if(elementType == null || !(typeof(IList).IsAssignableFrom(expectedType) || expectedType.IsArray))
+            {
+                var enumerableType = typeof(IEnumerable<>).MakeGenericType(elementType);
+                return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.TypeMismatch, string.Format(TypeMismatchMessage, enumerableType));
+            }
+
+            var items = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(elementType));
+            foreach(var item in listValue.Items)
+            {
+                items.Add(ConvertFromValue(elementType, item));
+            }
+
+            if(expectedType.IsArray)
+            {
+                var array = Array.CreateInstance(elementType, items.Count);
+                items.CopyTo(array, 0);
+                result = array;
+            }
+            else
+            {
+                result = items;
+            }
+            return ConversionResult.Success;
+        }
+
         private ConversionResult TryConvertSimpleValue(Type expectedType, Value value, out object result, bool silent = false)
         {
             result = null;
@@ -1382,9 +1460,10 @@ namespace Antmicro.Renode.PlatformDescription
 
             var results = new[]
             {
-                TryConvertSimplestValue<StringValue>(value, expectedType, typeof(string), "string", ref result),
-                TryConvertSimplestValue<BoolValue>(value, expectedType, typeof(bool), "bool", ref result),
-                TryConvertRangeValue(value, expectedType, ref result)
+                TryConvertSimplestValue<StringValue>(value, expectedType, typeof(string), ref result),
+                TryConvertSimplestValue<BoolValue>(value, expectedType, typeof(bool), ref result),
+                TryConvertRangeValue(value, expectedType, ref result),
+                TryConvertListValue(value, expectedType, ref result),
             };
 
             var meaningfulResult = results.FirstOrDefault(x => x.ResultType != ConversionResultType.ConversionNotApplied);
@@ -1415,23 +1494,28 @@ namespace Antmicro.Renode.PlatformDescription
                     return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.TypeMismatch, string.Format(TypeMismatchMessage, expectedType));
                 }
 
-                // Compare types first as enum's type may use an alias
-                if(!TypeNameMatches(enumValue.TypeName, expectedType, silent))
+                // If the enum was specified in full (and not as just .Value) then verify whether
+                // the given namespace and type name matches
+                if(enumValue.IsFullyQualified)
                 {
-                    return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
-                                                $"Enum type mismatch, expected '{expectedType.Name}' instead of '{enumValue.TypeName}'.");
-                }
-
-                var expectedNamespace = expectedType.Namespace.Split('.');
-                var givenNamespace = enumValue.ReversedNamespace;
-
-                // Compare namespaces
-                foreach(var names in givenNamespace.Zip(expectedNamespace.Reverse(), (first, second) => Tuple.Create(first, second)))
-                {
-                    if(names.Item1 != names.Item2)
+                    // Compare types first as enum's type may use an alias
+                    if(!TypeNameMatches(enumValue.TypeName, expectedType, silent))
                     {
                         return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
-                                                    $"Enum namespace mismatch, expected '{names.Item2}' instead of '{names.Item1}'.");
+                                                    $"Enum type mismatch, expected '{expectedType.Name}' instead of '{enumValue.TypeName}'.");
+                    }
+
+                    var expectedNamespace = expectedType.Namespace.Split('.');
+                    var givenNamespace = enumValue.ReversedNamespace;
+
+                    // Compare namespaces
+                    foreach(var names in givenNamespace.Zip(expectedNamespace.Reverse(), (first, second) => Tuple.Create(first, second)))
+                    {
+                        if(names.Item1 != names.Item2)
+                        {
+                            return new ConversionResult(ConversionResultType.ConversionUnsuccesful, ParsingError.EnumMismatch,
+                                                        $"Enum namespace mismatch, expected '{names.Item2}' instead of '{names.Item1}'.");
+                        }
                     }
                 }
 
@@ -1686,24 +1770,26 @@ namespace Antmicro.Renode.PlatformDescription
             }
             createdDisposables.Clear();
 
-            string source, fileName;
-            if(!GetElementSourceAndPath(failingObject, out fileName, out source))
-            {
-                HandleInternalError();
-            }
+            // Ignoring failure as the location is optional here. It won't be present when calling
+            // Monitor.Parse directly (as in unit tests for example) and we don't want to lose the
+            // actual error by overwriting it with an error that no location was found.
+            GetElementSourceAndPath(failingObject, out var fileName, out var source);
 
             var lineNumber = failingObject.StartPosition.Line;
             var columnNumber = failingObject.StartPosition.Column;
             var messageBuilder = new StringBuilder();
             messageBuilder.AppendFormat("Error E{0:D2}: ", (int)error);
             messageBuilder.AppendLine(message);
-            messageBuilder.AppendFormat("At {2}{0}:{1}:", lineNumber, columnNumber, fileName == "" ? "" : fileName + ':');
+            messageBuilder.AppendFormat("At {2}{0}:{1}:", lineNumber, columnNumber, string.IsNullOrEmpty(fileName) ? "" : fileName + ':');
             messageBuilder.AppendLine();
-            var sourceInLines = source.Replace("\r", string.Empty).Split(new[] { '\n' }, StringSplitOptions.None);
-            var problematicLine = sourceInLines[lineNumber - 1];
-            messageBuilder.AppendLine(problematicLine);
-            messageBuilder.Append(' ', columnNumber - 1);
-            messageBuilder.Append('^', longMark ? Math.Min(problematicLine.Length - (columnNumber - 1), failingObject.Length) : 1);
+            if(source != null)
+            {
+                var sourceInLines = source.Replace("\r", string.Empty).Split(new[] { '\n' }, StringSplitOptions.None);
+                var problematicLine = sourceInLines[lineNumber - 1];
+                messageBuilder.AppendLine(problematicLine);
+                messageBuilder.Append(' ', columnNumber - 1);
+                messageBuilder.Append('^', longMark ? Math.Min(problematicLine.Length - (columnNumber - 1), failingObject.Length) : 1);
+            }
             throw new ParsingException(error, messageBuilder.ToString());
         }
 
@@ -1754,38 +1840,6 @@ namespace Antmicro.Renode.PlatformDescription
             return false;
         }
 
-        private static string GetTypeListing(Type[] typesToAssign)
-        {
-	        return typesToAssign.Length == 1 ? string.Format("type '{0}'", typesToAssign[0])
-												   : "possible types " + typesToAssign.Select(x => string.Format("'{0}'", x.Name)).Aggregate((x, y) => x + ", " + y);
-        }
-
-        private static string GetFriendlyConstructorName(ConstructorInfo ctor)
-        {
-            var parameters = ctor.GetParameters();
-            if(parameters.Length == 0)
-            {
-                return string.Format("{0} with no parameters", ctor.DeclaringType);
-            }
-            return string.Format("{0} with the following parameters: [{1}]", ctor.DeclaringType, parameters.Select(x => x.ParameterType + (x.HasDefaultValue ? " (optional)" : ""))
-                                 .Aggregate((x, y) => x + ", " + y));
-        }
-
-        private static IEnumerable<PropertyInfo> GetGpioProperties(Type type)
-        {
-            return type.GetProperties(BindingFlags.Public | BindingFlags.Instance).Where(x => typeof(GPIO).IsAssignableFrom(x.PropertyType));
-        }
-
-        private static string GetValidEnumValues(Type expectedType)
-        {
-            var validValues = new StringBuilder();
-            foreach(var field in Enum.GetValues(expectedType))
-            {
-                validValues.AppendLine($"       {expectedType.Name}.{field},");
-            }
-            return validValues.ToString();
-        }
-
         private readonly Machine machine;
         private readonly IUsingResolver usingResolver;
         private readonly IScriptHandler scriptHandler;
@@ -1807,6 +1861,19 @@ namespace Antmicro.Renode.PlatformDescription
         private const string DefaultNamespace = "Antmicro.Renode.Peripherals.";
         private const string TypeMismatchMessage = "Type mismatch. Expected {0}.";
 
+        private class IrqCombinerConnection
+        {
+            public IrqCombinerConnection(CombinedInput combiner)
+            {
+                Combiner = combiner;
+                NextConnectionIndex = 0;
+            }
+
+            public int NextConnectionIndex;
+
+            public readonly CombinedInput Combiner;
+        }
+
         private class WithPositionForSyntaxErrors : IWithPosition
         {
             public static WithPositionForSyntaxErrors FromResult<T>(IResult<T> result, string fileName, string source)
@@ -1816,14 +1883,17 @@ namespace Antmicro.Renode.PlatformDescription
             }
 
             public int Length { get; private set; }
+
             public Position StartPosition { get; private set; }
+
             public string FileName { get; private set; }
+
             public string Source { get; private set; }
 
             private WithPositionForSyntaxErrors(int length, Position startPosition, string fileName, string source)
             {
-            	Length = length;
-            	StartPosition = startPosition;
+                Length = length;
+                StartPosition = startPosition;
                 FileName = fileName;
                 Source = source;
             }
@@ -1839,7 +1909,9 @@ namespace Antmicro.Renode.PlatformDescription
             }
 
             public ReferenceValueStack Previous { get; private set; }
+
             public ReferenceValue Value { get; private set; }
+
             public Entry Entry { get; private set; }
         }
 
@@ -1855,19 +1927,6 @@ namespace Antmicro.Renode.PlatformDescription
             public readonly string PeripheralName;
             public readonly int? LocalIndex;
             public readonly int Index;
-        }
-
-        private class IrqCombinerConnection
-        {
-            public IrqCombinerConnection(CombinedInput combiner)
-            {
-                Combiner = combiner;
-                nextConnectionIndex = 0;
-            }
-
-            public int nextConnectionIndex;
-
-            public readonly CombinedInput Combiner;
         }
     }
 }

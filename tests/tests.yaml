@@ -183,7 +183,7 @@
 - tests/unit-tests/symbols.robot
 - tests/unit-tests/aarch64-host.robot
 - tests/platforms/MSP430X.robot
-- tests/unit-tests/riscv-zve-extension.robot
+- tests/unit-tests/riscv-extensions.robot
 - tests/unit-tests/sync_pc.robot
 - tests/platforms/systemc/interrupts/interrupts.robot
 - tests/platforms/systemc/multiple-peripherals/multiple-peripherals.robot
@@ -207,6 +207,7 @@
 - tests/platforms/systemc/dma/dma.robot
 - tests/platforms/UP_Squared.robot
 - tests/platforms/Veer_EL2.robot
+- tests/platforms/Veer_EL2_Timers.robot
 - tests/unit-tests/arm-dsp-examples-cortex-m4.robot
 - tests/unit-tests/arm-ge-flag.robot
 - tests/unit-tests/pause-without-sleep.robot
@@ -217,6 +218,9 @@
 - tests/unit-tests/memory-access.robot
 - tests/unit-tests/resd-serialization.robot
 - tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot
+- tests/peripherals/VirtioMMIOEntropy.robot
+- tests/unit-tests/riscv-stack-access-hook.robot
+- tests/unit-tests/auto-save.robot
 
 # Do not use port 3333 in unit tests
 
@@ -228,3 +232,6 @@
 
 - port_3337:
   - tests/unit-tests/gdb/ArmVfpGDB.robot
+
+- port_3338:
+  - tests/unit-tests/gdb/armv8.robot

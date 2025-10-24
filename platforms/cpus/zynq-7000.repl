@@ -66,7 +66,7 @@ gic: IRQControllers.ARM_GenericInterruptController @ {
         sysbus new Bus.BusMultiRegistration { address: 0xF8F00100; size: 0x100; region: "cpuInterface" }
     }
     supportsTwoSecurityStates: false
-    architectureVersion: IRQControllers.ARM_GenericInterruptControllerVersion.GICv1
+    architectureVersion: .GICv1
     CPUInterfaceProductIdentifier: 0x390
     CPUInterfaceRevision: 0x2
     CPUInterfaceImplementer: 0x43B
@@ -95,7 +95,7 @@ slcr: Miscellaneous.Zynq7000_SystemLevelControlRegisters @ sysbus 0xF8000000
 nand: Python.PythonPeripheral @ sysbus 0xE000E000
     size: 0x4
     initable: false
-    script: "request.value = 0xFFFFFFFF"
+    script: "request.Value = 0xFFFFFFFF"
 
 dma_pl330: DMA.PL330_DMA @ sysbus 0xF8003000
     numberOfSupportedEventsAndInterrupts: 16
