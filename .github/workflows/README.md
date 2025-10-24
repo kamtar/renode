@@ -96,6 +96,12 @@ If the submodule update step fails:
    git push
    ```
 
+**Note:** The workflow automatically handles cases where specific submodule commits don't exist in the forked repositories by:
+- Checking out the repository without initializing submodules
+- Updating non-Infrastructure submodules from their original sources (antmicro)
+- Separately cloning and updating the Infrastructure submodule from the kamtar fork
+- This prevents "fatal: remote error: upload-pack: not our ref" errors
+
 ### Merge conflicts not resolved correctly
 
 If the "ours" strategy doesn't work as expected:
