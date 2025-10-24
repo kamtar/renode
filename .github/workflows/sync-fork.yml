@@ -26,7 +26,8 @@ jobs:
       
       - name: Add upstream remote
         run: |
-          git remote add upstream https://github.com/renode/renode.git || true
+          # Try renode/renode first, if it doesn't exist, use antmicro/renode
+          git remote add upstream https://github.com/renode/renode.git 2>/dev/null || git remote add upstream https://github.com/antmicro/renode.git || true
           git fetch upstream
       
       - name: Sync with upstream using ours strategy
@@ -35,27 +36,53 @@ jobs:
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           echo "Current branch: $CURRENT_BRANCH"
           
-          # Merge upstream/master into current branch with ours strategy for conflicts
-          git merge upstream/master -X ours -m "Sync with upstream (conflicts resolved with ours strategy)" || {
+          # Try to merge upstream/master, use master if it exists, otherwise main
+          UPSTREAM_BRANCH="master"
+          if ! git rev-parse --verify upstream/master >/dev/null 2>&1; then
+            UPSTREAM_BRANCH="main"
+          fi
+          
+          echo "Merging from upstream/$UPSTREAM_BRANCH"
+          
+          # Merge with ours strategy for conflicts
+          if git merge upstream/$UPSTREAM_BRANCH -X ours --no-edit; then
+            echo "Merge successful without conflicts"
+          else
             echo "Merge had conflicts, resolving with ours strategy"
+            # Accept all our changes for conflicts
             git checkout --ours .
             git add -A
-            git commit -m "Sync with upstream (conflicts resolved with ours strategy)"
-          }
+            if ! git diff --cached --quiet; then
+              git commit --no-edit || git commit -m "Sync with upstream (conflicts resolved with ours strategy)"
+            fi
+          fi
       
       - name: Trigger renode-infrastructure sync
         run: |
           # Trigger the sync workflow in kamtar/renode-infrastructure
-          curl -X POST \
+          # Use PAT if available, otherwise use GITHUB_TOKEN
+          AUTH_TOKEN="${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}"
+          
+          echo "Triggering renode-infrastructure sync workflow..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: Bearer $AUTH_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/kamtar/renode-infrastructure/actions/workflows/sync-fork.yml/dispatches \
-            -d '{"ref":"master"}'
+            -d '{"ref":"master"}')
           
-          # Wait for the workflow to complete (wait 2 minutes)
-          echo "Waiting for renode-infrastructure sync to complete..."
-          sleep 120
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          echo "HTTP response code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" -eq 204 ]; then
+            echo "Workflow triggered successfully"
+            # Wait for the workflow to complete (wait 2 minutes)
+            echo "Waiting for renode-infrastructure sync to complete..."
+            sleep 120
+          else
+            echo "Warning: Failed to trigger workflow or workflow doesn't exist yet (HTTP $HTTP_CODE)"
+            echo "Continuing with submodule update..."
+          fi
       
       - name: Update renode-infrastructure submodule
         run: |
@@ -64,8 +91,16 @@ jobs:
           # Fetch latest changes from kamtar/renode-infrastructure
           git fetch origin
           
-          # Get the latest commit from master branch
-          git checkout origin/master
+          # Check which branch exists (master or main)
+          BRANCH="master"
+          if ! git rev-parse --verify origin/master >/dev/null 2>&1; then
+            BRANCH="main"
+          fi
+          
+          echo "Using branch: $BRANCH"
+          
+          # Get the latest commit from the branch
+          git checkout origin/$BRANCH
           LATEST_COMMIT=$(git rev-parse HEAD)
           echo "Latest commit in renode-infrastructure: $LATEST_COMMIT"
           

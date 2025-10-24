@@ -1,0 +1,66 @@
+name: Sync Infrastructure Fork with Upstream
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Allow manual triggering
+  repository_dispatch:
+    # Allow triggering from other repositories
+
+jobs:
+  sync-infrastructure-fork:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Add upstream remote
+        run: |
+          # Try renode-infrastructure from antmicro or renode organization
+          git remote add upstream https://github.com/renode/renode-infrastructure.git 2>/dev/null || \
+          git remote add upstream https://github.com/antmicro/renode-infrastructure.git || true
+          git fetch upstream
+      
+      - name: Sync with upstream using ours strategy
+        run: |
+          # Get current branch name
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Current branch: $CURRENT_BRANCH"
+          
+          # Try to merge upstream/master, use master if it exists, otherwise main
+          UPSTREAM_BRANCH="master"
+          if ! git rev-parse --verify upstream/master >/dev/null 2>&1; then
+            UPSTREAM_BRANCH="main"
+          fi
+          
+          echo "Merging from upstream/$UPSTREAM_BRANCH"
+          
+          # Merge with ours strategy for conflicts
+          if git merge upstream/$UPSTREAM_BRANCH -X ours --no-edit; then
+            echo "Merge successful without conflicts"
+          else
+            echo "Merge had conflicts, resolving with ours strategy"
+            # Accept all our changes for conflicts
+            git checkout --ours .
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit --no-edit || git commit -m "Sync with upstream (conflicts resolved with ours strategy)"
+            fi
+          fi
+      
+      - name: Push changes
+        run: |
+          git push origin HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
