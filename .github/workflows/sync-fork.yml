@@ -90,13 +90,7 @@ jobs:
           git submodule init
 
           # Get list of all submodules except Infrastructure
-          # Parse .gitmodules to get all submodule paths
-          SUBMODULES=""
-          while read -r key path; do
-            if [[ "$path" != "src/Infrastructure" ]]; then
-              SUBMODULES="$SUBMODULES $path"
-            fi
-          done < <(git config --file .gitmodules --get-regexp path)
+          SUBMODULES=$(git config --file .gitmodules --get-regexp path | awk '{ print $2 }' | grep -v "^src/Infrastructure$")
 
           # Update non-Infrastructure submodules
           for submodule in $SUBMODULES; do
