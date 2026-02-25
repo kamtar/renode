@@ -55,6 +55,11 @@ The following packages formats are available:
 
 Stable, numbered releases and their release notes are available in the [Releases section](https://github.com/renode/renode/releases) on GitHub.
 
+### Downloading Windows net8.0 binaries from GitHub Actions
+
+If you need downloadable Windows net8.0 binaries from this repository, run the `Build Windows net8.0 artifact` workflow from the [Actions tab](https://github.com/kamtar/renode/actions).  
+After the run completes, download the `renode-windows-net8.0-win-x64` artifact.
+
 ### Using the Linux portable release
 
 If you are a Linux user, the easiest way to use Renode is to download the latest `linux-portable` from [the releases section](https://github.com/renode/renode/releases/latest) and unpack it using:

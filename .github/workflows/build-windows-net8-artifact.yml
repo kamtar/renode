@@ -1,0 +1,43 @@
+name: Build Windows net8.0 artifact
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows-net8:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Prepare net8.0 Windows build settings
+        shell: bash
+        run: |
+          mkdir -p output
+          cp src/Infrastructure/src/Emulator/Cores/windows-properties.csproj output/properties.csproj
+          cat <<'EOF' > Directory.Build.targets
+          <Project>
+            <PropertyGroup>
+              <TargetFrameworks>net8.0-windows10.0.17763.0</TargetFrameworks>
+              <CsWinRTAotOptimizerEnabled>false</CsWinRTAotOptimizerEnabled>
+            </PropertyGroup>
+          </Project>
+          EOF
+
+      - name: Publish Windows net8.0 binaries
+        run: dotnet publish src/Renode/Renode_NET.csproj -c Release -f net8.0-windows10.0.17763.0 -r win-x64 --self-contained true /p:GUI_DISABLED=true /p:NET=true
+
+      - name: Upload Windows net8.0 binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: renode-windows-net8.0-win-x64
+          path: output/bin/Release/win-x64/publish
+          if-no-files-found: error
