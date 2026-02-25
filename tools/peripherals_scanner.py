@@ -71,6 +71,7 @@ def try_get_category(platform):
         "cortex-a53-gicv3": "GENERIC ARM",
         "cortex-a53-gicv3_smp": "GENERIC ARM",
         "cortex_a53_virtio": "GENERIC ARM",
+        "cortex_a53_console": "GENERIC ARM",
         "cortex-a78": "GENERIC ARM",
         "cortex-r52": "GENERIC ARM",
         "cortex-r52_smp": "GENERIC ARM",
@@ -100,6 +101,8 @@ def try_get_category(platform):
         "efr32mg24":   "EFM",
         "efr32mg26":   "EFM",
         "efr32xg22":   "EFM",
+        "egis_et171": "EGIS",
+        "focaltech_ft9001": "FOCALTECH",
         "eos-s3":  "EOS",
         "eos-s3-qomu": "EOS",
         "eos-s3-quickfeather": "EOS",
@@ -115,6 +118,8 @@ def try_get_category(platform):
         "ice40up5k-mdp-evn":   "LITEX",
         "imxrt1064":   "NXP I.MX",
         "imxrt500":    "NXP I.MX",
+        "mimxrt798s":  "NXP I.MX",
+        "mimxrt700_evk":  "NXP I.MX",
         "kendryte_k210":   "KENDRYTE",
         "leon3":   "GAISLER",
         "leon3-externals": "GAISLER",
@@ -256,6 +261,7 @@ def try_get_category(platform):
         "vegaboard_ri5cy": "OTHER RISC-V",
         "x86-kvm": "X86",
         "x86_64-kvm": "X86-64",
+        "x86_64-kvm-virtio": "X86-64",
     }
 
     if platform.get_name() not in mapping:

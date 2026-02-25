@@ -3,8 +3,10 @@ Library                             ../../tools/execution_tracer/execution_trace
 
 *** Variables ***
 ${bin_out_signature}                ReTrace\x04
-${triple_and_model}                 riscv32 rv32imacv
-${64_triple_and_model}              riscv64 rv64imacv
+${arm_m_triple_and_model}           thumb cortex-m3
+${arm_a_triple_and_model}           armv7a cortex-a7
+${riscv_triple_and_model}           riscv32 rv32imacv
+${riscv_64_triple_and_model}        riscv64 rv64imacv
 
 ${riscv_amoadd_d}                   amoadd.d.aqrl a5, a4, (a3)
 ${riscv_amoadd_d_address}           0x2010
@@ -68,6 +70,70 @@ Trace The Execution On The Versatile Platform
     ${output}=                                  Get File  ${trace_file}
     ${output_lines}=                            Split To Lines  ${output}
     RETURN  ${output_lines}
+
+Trace The Execution On The STM Platform
+    [Arguments]                                 ${trace_format}  ${is_binary}
+    Execute Command                             include @platforms/cpus/stm32f103.repl
+
+    # movs r0, #16
+    Execute Command                             sysbus WriteWord 0x0 0x2010 cpu
+    # msr basepri, r0
+    Execute Command                             sysbus WriteWord 0x2 0xf380 cpu
+    Execute Command                             sysbus WriteWord 0x4 0x8811 cpu
+    # ldr r0, [pc, #24]
+    Execute Command                             sysbus WriteWord 0x6 0x4806 cpu
+    # mov r1, #2048
+    Execute Command                             sysbus WriteWord 0x8 0xf44f cpu
+    Execute Command                             sysbus WriteWord 0xa 0x6100 cpu
+
+    ${trace_file}=                              Allocate Temporary File
+    Execute Command                             cpu CreateExecutionTracing "tracer" @${trace_file} ${trace_format} ${is_binary}
+
+    Execute Command                             sysbus.cpu PC 0
+    Execute Command                             cpu Step
+    Execute Command                             cpu Step
+    Execute Command                             cpu Step
+    Execute Command                             cpu Step
+    Execute Command                             cpu DisableExecutionTracing
+
+    IF  ${is_binary}
+        ${output}=                                  Get Binary File  ${trace_file}
+        RETURN  ${output}
+    ELSE
+        ${output}=                                  Get File  ${trace_file}
+        ${output_lines}=                            Split To Lines  ${output}
+        RETURN  ${output_lines}
+    END
+
+Prepare Program With ARM and Thumb
+    # ARM
+    # mov r0, r0
+    Execute Command                             sysbus WriteDoubleWord 0x10000 0xe1a00000 cpu
+    # nop
+    Execute Command                             sysbus WriteDoubleWord 0x10004 0xe320f000 cpu
+    # add r1, r6, r2
+    Execute Command                             sysbus WriteDoubleWord 0x10008 0xe0861002 cpu
+    # blx #65516
+    Execute Command                             sysbus WriteDoubleWord 0x1000c 0xfa003ffb cpu
+    # wfi
+    Execute Command                             sysbus WriteDoubleWord 0x10010 0xe320f003 cpu
+
+    # Thumb
+    # movs r0, #0
+    Execute Command                             sysbus WriteWord 0x20000 0x2000 cpu
+    # mov r1, r0
+    Execute Command                             sysbus WriteWord 0x20002 0x4601 cpu
+    # cmp r4, r2
+    Execute Command                             sysbus WriteWord 0x20004 0x4294 cpu
+    # sbcs.w r9, r5, r3
+    Execute Command                             sysbus WriteWord 0x20006 0xeb75 cpu
+    Execute Command                             sysbus WriteWord 0x20008 0x0903 cpu
+    # bx lr
+    Execute Command                             sysbus WriteWord 0x2000a 0x4770 cpu
+    # nop
+    Execute Command                             sysbus WriteWord 0x2000c 0x46c0 cpu
+
+    Execute Command                             sysbus.cpu PC 0x10000
 
 Run And Trace Simple Program On RISC-V
     [Arguments]                                 ${pc_start_hex}  ${trace_format}  ${is_binary}
@@ -179,9 +245,9 @@ Should Be Able To Add Memory Accesses To The Trace In Binary Format On RISC-V
     Should Be Equal As Bytes                    ${output_file}[00:08]  ${bin_out_signature}
                                                 # [0]: pc_width; [1]: include_opcode
     Should Be Equal As Bytes                    ${output_file}[08:10]  \x04\x01
-                                                # [0]: uses_thumb_flag; [1]: triple_and_model_length;
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
     Should Be Equal As Bytes                    ${output_file}[10:12]  \x00\x11 
-    Should Be Equal As Bytes                    ${output_file}[12:29]  ${triple_and_model}
+    Should Be Equal As Bytes                    ${output_file}[12:29]  ${riscv_triple_and_model}
 
                                                 # [0:4]: pc; [4]: opcode_length; [5:9]: opcode; [10]: additional_data_type = None  
     Should Be Equal As Bytes                    ${output_file}[29:39]  \x00\x20\x00\x00\x04\xb7\x05\x03\x00\x00
@@ -229,9 +295,9 @@ Should Dump Opcodes As Binary On RISC-V
     Length Should Be                            ${trace}  45
     Should Be Equal As Bytes                    ${trace}[00:08]  ${bin_out_signature}
     Should Be Equal As Bytes                    ${trace}[08:10]  \x00\x01
-                                                # [0]: uses_thumb_flag; [1]: triple_and_model_length;
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
     Should Be Equal As Bytes                    ${trace}[10:12]  \x00\x11 
-    Should Be Equal As Bytes                    ${trace}[12:29]  ${triple_and_model}
+    Should Be Equal As Bytes                    ${trace}[12:29]  ${riscv_triple_and_model}
 
     Should Be Equal As Bytes                    ${trace}[29:35]  \x04\x13\x00\x00\x00\x00
     Should Be Equal As Bytes                    ${trace}[35:39]  \x02\x01\x00\x00
@@ -245,9 +311,9 @@ Should Dump PCs And Opcodes As Binary On RISC-V
     Length Should Be                            ${trace}  57
     Should Be Equal As Bytes                    ${trace}[00:08]  ${bin_out_signature}
     Should Be Equal As Bytes                    ${trace}[08:10]  \x04\x01
-                                                # [0]: uses_thumb_flag; [1]: triple_and_model_length;
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
     Should Be Equal As Bytes                    ${trace}[10:12]  \x00\x11 
-    Should Be Equal As Bytes                    ${trace}[12:29]  ${triple_and_model}
+    Should Be Equal As Bytes                    ${trace}[12:29]  ${riscv_triple_and_model}
 
     Should Be Equal As Bytes                    ${trace}[29:33]  \x00\x20\x00\x00
     Should Be Equal As Bytes                    ${trace}[33:39]  \x04\x13\x00\x00\x00\x00
@@ -374,7 +440,7 @@ Should Trace Consecutive Blocks On RISC-V
 Should Trace In ARM and Thumb State
     [Arguments]                                 ${memory_per_cpu}
     Execute Command                             mach create
-    Execute Command                             machine LoadPlatformDescriptionFromString "cpu: CPU.ARMv7A @ sysbus { cpuType: \\"cortex-a9\\" }"
+    Execute Command                             machine LoadPlatformDescriptionFromString "cpu: CPU.ARMv7A @ sysbus { cpuType: \\"cortex-a7\\" }"
     IF  ${memory_per_cpu}
         Execute Command                             machine LoadPlatformDescriptionFromString "mem: Memory.MappedMemory @ sysbus new Bus.BusPointRegistration { address: 0x0; cpu: cpu } { size: 0x1000 }"
     ELSE
@@ -430,30 +496,10 @@ Should Trace In ARM and Thumb State
 Should Trace in ARM and Thumb State ARMv8R
     Execute Command                             mach create
     Execute Command                             machine LoadPlatformDescription "${CURDIR}/../../platforms/cpus/cortex-r52.repl"
-    # ARM
-    # mov r0, r0
-    Execute Command                             sysbus WriteDoubleWord 0x10000 0xe1a00000 cpu
-    # nop
-    Execute Command                             sysbus WriteDoubleWord 0x10004 0xe320f000 cpu
-    # add r1, r6, r2
-    Execute Command                             sysbus WriteDoubleWord 0x10008 0xe0861002 cpu
-    # blx #65516
-    Execute Command                             sysbus WriteDoubleWord 0x1000c 0xfa003ffb cpu
-    # wfi
-    Execute Command                             sysbus WriteDoubleWord 0x10010 0xe320f003 cpu
 
-    # Thumb
-    # movs r0, #0 ; mov r1, r0
-    Execute Command                             sysbus WriteDoubleWord 0x20000 0x46012000 cpu
-    # cmp r4, r2
-    Execute Command                             sysbus WriteWord 0x20004 0x4294 cpu
-    # sbcs.w r9, r5, r3
-    Execute Command                             sysbus WriteDoubleWord 0x20006 0x0903eb75 cpu
-    # bx lr ; nop
-    Execute Command                             sysbus WriteDoubleWord 0x2000a 0x46c04770 cpu
+    Prepare Program With ARM and Thumb
 
     ${trace_file}=                              Allocate Temporary File
-    Execute Command                             sysbus.cpu PC 0x10000
     Execute Command                             sysbus.cpu CreateExecutionTracing "tracer" "${trace_file}" Disassembly
     Execute Command                             emulation RunFor "0.0001"
     Execute Command                             sysbus.cpu DisableExecutionTracing
@@ -471,7 +517,6 @@ Should Trace in ARM and Thumb State ARMv8R
     Should Match                                ${trace[7]}     0x00020006: *eb750903 *sbcs.w r9, r5, r3
     Should Match                                ${trace[8]}     0x0002000a: *4770 *bx lr
     Should Match                                ${trace[9]}     0x00010010: *e320f003 *wfi
-
 
 *** Test Cases ***
 Should Dump PCs
@@ -514,6 +559,76 @@ Should Dump PCs And Opcodes
     Should Be Equal                             ${trace[3]}   0x359C08: 0xE28F3030
     Should Be Equal                             ${trace[14]}  0x8010: 0x0A0D470D
     Should Be Equal                             ${trace[15]}  0x8014: 0xE28F302C
+
+Should Dump PCs And Opcodes With Thumb
+    ${trace}=                                   Trace The Execution On The STM Platform  PCAndOpcode  False
+
+    Length Should Be                            ${trace}      4
+    Should Be Equal                             ${trace[0]}   0x0: 0x2010
+    Should Be Equal                             ${trace[1]}   0x2: 0xF3808811
+    Should Be Equal                             ${trace[2]}   0x6: 0x4806
+    Should Be Equal                             ${trace[3]}   0x8: 0xF44F6100
+
+Should Dump PCs And Opcodes As Binary With Thumb
+    ${trace}=                                   Trace The Execution On The STM Platform  PCAndOpcode  True
+
+    Length Should Be                            ${trace}  63
+    Should Be Equal As Bytes                    ${trace}[00:08]  ${bin_out_signature}
+    Should Be Equal As Bytes                    ${trace}[08:10]  \x04\x01
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
+    Should Be Equal As Bytes                    ${trace}[10:12]  \x00\x0f
+    Should Be Equal As Bytes                    ${trace}[12:27]  ${arm_m_triple_and_model}
+
+    Should Be Equal As Bytes                    ${trace}[27:35]  \x00\x00\x00\x00\x02\x10\x20\x00
+    # NOTE: 32-bit Thumb instructions are stored in Mixed-Endian: each 16-bit half-word is stored in LE, but the more significant half-word is stored before the less significant one
+    Should Be Equal As Bytes                    ${trace}[35:45]  \x02\x00\x00\x00\x04\x80\xf3\x11\x88\x00
+    Should Be Equal As Bytes                    ${trace}[45:53]  \x06\x00\x00\x00\x02\x06\x48\x00
+    Should Be Equal As Bytes                    ${trace}[53:63]  \x08\x00\x00\x00\x04\x4f\xf4\x00\x61\x00
+
+# This tests both ARMv7A and ARMv7R as they share the same disassembly machinery
+Should Dump PCs and Opcodes As Binary With ARM and Thumb
+    Execute Command                             mach create
+    Execute Command                             machine LoadPlatformDescriptionFromString "cpu: CPU.ARMv7A @ sysbus { cpuType: \\"cortex-a7\\" }"
+    Execute Command                             machine LoadPlatformDescriptionFromString "mem: Memory.MappedMemory @ sysbus 0x10000 { size: 0x20000 }"
+    Prepare Program With ARM and Thumb
+
+    ${FILE}=                                    Allocate Temporary File
+    Execute Command                             sysbus.cpu CreateExecutionTracing "tracer" @${FILE} PCAndOpcode true
+
+    Execute Command                             emulation RunFor "0.001"
+
+    Execute Command                             sysbus.cpu DisableExecutionTracing
+    ${trace}=                                   Get Binary File  ${FILE}
+
+    Should Be Equal As Bytes                    ${trace}[00:08]  ${bin_out_signature}
+    Should Be Equal As Bytes                    ${trace}[08:10]  \x04\x01
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
+    Should Be Equal As Bytes                    ${trace}[10:12]  \x01\x10
+
+    Should Be Equal As Bytes                    ${trace}[12:28]  ${arm_a_triple_and_model}
+
+    # ARM - instruction type 0, 4 instructions
+    Should Be Equal As Bytes                    ${trace}[28:37]  \x00\x04\x00\x00\x00\x00\x00\x00\x00
+    # mov r0, r0
+    Should Be Equal As Bytes                    ${trace}[37:47]  \x00\x00\x01\x00\x04\x00\x00\xa0\xe1\x00
+    # nop
+    Should Be Equal As Bytes                    ${trace}[47:57]  \x04\x00\x01\x00\x04\x00\xf0\x20\xe3\x00
+    # add r1, r6, r2
+    Should Be Equal As Bytes                    ${trace}[57:67]  \x08\x00\x01\x00\x04\x02\x10\x86\xe0\x00
+    # blx
+    Should Be Equal As Bytes                    ${trace}[67:77]  \x0c\x00\x01\x00\x04\xfb\x3f\x00\xfa\x00
+    # Thumb - instruction type 1, 5 instructions
+    Should Be Equal As Bytes                    ${trace}[77:86]  \x01\x05\x00\x00\x00\x00\x00\x00\x00
+    # movs r0, #0
+    Should Be Equal As Bytes                    ${trace}[86:94]  \x00\x00\x02\x00\x02\x00\x20\x00
+    # mov r1, r0
+    Should Be Equal As Bytes                    ${trace}[94:102]  \x02\x00\x02\x00\x02\x01\x46\x00
+    # cmp r4, r2
+    Should Be Equal As Bytes                    ${trace}[102:110]  \x04\x00\x02\x00\x02\x94\x42\x00
+    # NOTE: 32-bit Thumb instructions are stored in Mixed-Endian: each 16-bit half-word is stored in LE, but the more significant half-word is stored before the less significant one
+    # sbcs.w r9, r5, r3
+    Should Be Equal As Bytes                    ${trace}[110:120]  \x06\x00\x02\x00\x04\x75\xeb\x03\x09\x00
+    Should Be Equal As Bytes                    ${trace}[120:128]  \x0a\x00\x02\x00\x02\x70\x47\x00
 
 Should Dump PCs And Opcodes For Isolated Memory
     Create Machine RISC-V 32-bit                0x2000  memory_per_cpu=True
@@ -618,9 +733,9 @@ Should Be Able To Add Vector Configuration To The Trace In Binary Format
 
     Should Be Equal As Bytes                    ${output_file}[00:08]  ${bin_out_signature}
     Should Be Equal As Bytes                    ${output_file}[08:10]  \x04\x01
-                                                # [0]: uses_thumb_flag; [1]: triple_and_model_length;
+                                                # [0]: multiple_instruction_sets_flag; [1]: triple_and_model_length;
     Should Be Equal As Bytes                    ${output_file}[10:12]  \x00\x11 
-    Should Be Equal As Bytes                    ${output_file}[12:29]  ${triple_and_model}
+    Should Be Equal As Bytes                    ${output_file}[12:29]  ${riscv_triple_and_model}
 
                                                 # [0:4]: pc; [4]: opcode_length; [5:9]: opcode; [10]: additional_data_type = None  
     Should Be Equal As Bytes                    ${output_file}[29:39]  \x00\x20\x00\x00\x04\x13\x00\x00\x00\x00
@@ -673,3 +788,25 @@ Should Be Able To Add Amo Operands To The Trace In Binary Format
     Should Contain                              ${entry}[1]  ${riscv_amoadd_d_operands_before}
     Should Contain                              ${entry}[2]  ${riscv_amoadd_d_operands_after}
 
+Should Trace in ZynQMP
+    Execute Command                             mach create
+    Execute Command                             machine LoadPlatformDescription @platforms/cpus/zynqmp.repl
+
+    Execute Command                             sysbus WriteDoubleWord 0x00006000 0xE321F0D1 sysbus.cluster1.rpu0
+    Execute Command                             sysbus WriteDoubleWord 0x00006004 0xEE113F10 sysbus.cluster1.rpu0
+    Execute Command                             sysbus WriteDoubleWord 0x00006008 0x3F10EE11 sysbus.cluster1.rpu0
+
+    ${trace_file}=                              Allocate Temporary File
+    Execute Command                             sysbus.cluster1.rpu0 PC 0x00006000
+    Execute Command                             sysbus.cluster1.rpu0 CreateExecutionTracing "tracer" "${trace_file}" Disassembly
+    Execute Command                             sysbus.cluster1.rpu0 Step
+    Execute Command                             sysbus.cluster1.rpu0 Step
+    Execute Command                             sysbus.cluster1.rpu0 Step
+    Execute Command                             sysbus.cluster1.rpu0 DisableExecutionTracing
+
+    ${content}=                                 Get File        ${trace_file}
+    @{trace}=                                   Split To Lines  ${content}
+    Length Should Be                            ${trace}        3
+    Should Match                                ${trace[0].strip()}     0x00006000: *e321f0d1 *msr CPSR_c, #209
+    Should Match                                ${trace[1].strip()}     0x00006004: *ee113f10 *mrc p15, #0, r3, c1, c0, #0
+    Should Match                                ${trace[2].strip()}     0x00006008: *3f10ee11 *svclo #1109521
