@@ -16,6 +16,8 @@
   - tests/platforms/Renesas_RZ_G2L.robot
   - tests/platforms/SiFive-FU540.robot
 
+- tests/unit-tests/riscv-isa-tests.robot
+- tests/unit-tests/riscv-arch-tests.robot
 - tests/platforms/zynqmp.robot
 - tests/example.robot
 - tests/platforms/CC2538/cc2538_cryptoprocessor.robot
@@ -38,6 +40,7 @@
 - tests/unit-tests/riscv-amocas.robot
 - tests/unit-tests/mpu.robot
 - tests/unit-tests/arm-atomic.robot
+- tests/unit-tests/armv8-load-store-exclusive.robot
 - tests/platforms/SAME70.robot
 - tests/platforms/Murax.robot
 - tests/unit-tests/monitor-tests.robot
@@ -66,6 +69,7 @@
 - tests/platforms/STM32F4_Discovery.robot
 - tests/unit-tests/riscv-custom-instructions.robot
 - tests/unit-tests/riscv-lr-sc-instructions.robot
+- tests/unit-tests/riscv-lr-sc-strong-atomicity.robot
 - tests/metrics-analyzer/metrics-analyzer.robot
 - tests/platforms/STM32W108.robot
 - tests/platforms/STM32F7.robot
@@ -93,6 +97,7 @@
 - tests/platforms/xtensa.robot
 - tests/unit-tests/InterruptHooks/arm-m.robot
 - tests/unit-tests/arm-cortex-m-fpu.robot
+- tests/unit-tests/arm-cortex-m-fpv5.robot
 - tests/unit-tests/log-tests.robot
 - tests/unit-tests/hex.robot
 - tests/unit-tests/big-endian-watchpoint.robot
@@ -102,6 +107,7 @@
 - tests/unit-tests/per-core-registration.robot
 - tests/unit-tests/it-status.robot
 - tests/unit-tests/arm-thumb.robot
+- tests/unit-tests/arm-thumb2-srs-rfe.robot
 - tests/unit-tests/emulation-mode.robot
 - tests/unit-tests/tb_overwrite.robot
 - tests/tools/sel4_extensions.robot
@@ -196,6 +202,7 @@
 - tests/unit-tests/bus-performance.robot
 - tests/unit-tests/profiler-trace.robot
 - tests/platforms/imxrt500.robot
+- tests/platforms/imxrt700.robot
 - tests/unit-tests/function-names.robot
 - tests/peripherals/AK09918.robot
 - tests/peripherals/STM32SDMMC.robot
@@ -207,7 +214,9 @@
 - tests/platforms/systemc/dma/dma.robot
 - tests/platforms/UP_Squared.robot
 - tests/platforms/Veer_EL2.robot
+- tests/platforms/VeeR_EL2_PIC.robot
 - tests/platforms/Veer_EL2_Timers.robot
+- tests/platforms/Icicle-Kit.robot
 - tests/unit-tests/arm-dsp-examples-cortex-m4.robot
 - tests/unit-tests/arm-ge-flag.robot
 - tests/unit-tests/pause-without-sleep.robot
@@ -219,8 +228,25 @@
 - tests/unit-tests/resd-serialization.robot
 - tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot
 - tests/peripherals/VirtioMMIOEntropy.robot
+- tests/peripherals/VirtioMMIOConsole.robot
 - tests/unit-tests/riscv-stack-access-hook.robot
 - tests/unit-tests/auto-save.robot
+- tests/unit-tests/offset-bus-registrations.robot
+- tests/unit-tests/arm-cortex-m-trustzone.robot
+- tests/platforms/X86KVM.robot
+- tests/platforms/X86_64KVM.robot
+- tests/unit-tests/riscv-external-pmp.robot
+- tests/platforms/egis_et171-zephyr.robot
+- tests/peripherals/AndesATCPIT100.robot
+- tests/peripherals/AndesNCEPLIC100.robot
+- tests/peripherals/AndesATCGPIO100.robot
+- tests/peripherals/AndesATCWDT200_Watchdog.robot
+- tests/unit-tests/et171-pmp.robot
+- tests/peripherals/AndesATCRTC100.robot
+- tests/platforms/egis_et171.robot
+- tests/platforms/ARMv8M-MVE.robot
+- tests/platforms/focaltech-ft9001-zephyr.robot
+- tests/unit-tests/arm-cortex-m-mve.robot
 
 # Do not use port 3333 in unit tests
 
@@ -235,3 +261,9 @@
 
 - port_3338:
   - tests/unit-tests/gdb/armv8.robot
+
+- port_3339:
+  - tests/unit-tests/gdb/gdb_reverse_execution.robot
+
+- port_3340:
+  - tests/unit-tests/gdb/gdb_reverse_execution_resd.robot

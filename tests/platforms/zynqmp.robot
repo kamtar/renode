@@ -75,7 +75,7 @@ Boot U-Boot And Launch Linux
     Wait For Line On Uart           Starting kernel ...
 
 Boot Linux And Login
-    [Arguments]                     ${testerId}=0
+    [Arguments]                     ${testerId}=0  ${smp_count}=4
     # Verify that the GIC system register interface is not enabled
     # Wait for a message that gets logged early in boot, before any CPU features are printed
     Wait For Line On Uart           Booting Linux on physical CPU           testerId=${testerId}
@@ -85,11 +85,11 @@ Boot Linux And Login
     # that the previous "Should Not Be On Uart" covered the printing of all of the CPU features
     # (all prints occurred before we finished waiting for completion of `Should Not Be On Uart`).
     # This also verifies SMP support.
-    Wait For Line On Uart           SMP: Total of 4 processors activated    testerId=${testerId}  timeout=0
-    Wait For Line On Uart           CPU: All CPU(s) started at EL2          testerId=${testerId}  timeout=0
-    Wait For Prompt On Uart         buildroot login:                        testerId=${testerId}  timeout=50
-    Write Line To Uart              root                                    testerId=${testerId}
-    Wait For Prompt On Uart         ${LINUX_PROMPT}                         testerId=${testerId}
+    Wait For Line On Uart           SMP: Total of ${smp_count} processors activated  testerId=${testerId}  timeout=0
+    Wait For Line On Uart           CPU: All CPU(s) started at EL2                   testerId=${testerId}  timeout=0
+    Wait For Prompt On Uart         buildroot login:                                 testerId=${testerId}  timeout=50
+    Write Line To Uart              root                                             testerId=${testerId}
+    Wait For Prompt On Uart         ${LINUX_PROMPT}                                  testerId=${testerId}
 
 Check Exit Code
     [Arguments]                     ${testerId}=0
@@ -164,6 +164,7 @@ Should Detect I2C Peripherals
 
 Should Communicate With I2C Echo Peripheral
     Create Linux Machine
+    Execute Command                 ${LINUX_UART} CharacterTransmitDelayMicroseconds 20
 
     Execute Command                 machine LoadPlatformDescriptionFromString "i2cEcho: Mocks.EchoI2CDevice @ i2c1 ${I2C_ECHO_ADDRESS}"
 
@@ -179,27 +180,26 @@ Should Communicate With I2C Echo Peripheral
     Check Exit Code
 
 Should Communicate With I2C Echo Peripheral From 32-Bit Userspace On 64-Bit Kernel
+    Execute Command                 $bootargs="earlycon console=ttyPS1,115200n8 root=/dev/ram0 rw initrd=0x20000000,64M nr_cpus=1"
     Create Linux 32-Bit Userspace Machine
 
     Execute Command                 machine LoadPlatformDescriptionFromString "i2cEcho: Mocks.EchoI2CDevice @ i2c1 ${I2C_ECHO_ADDRESS}"
 
     Boot U-Boot And Launch Linux
-    Boot Linux And Login
+    Boot Linux And Login            smp_count=1
 
     # Suppress messages from the kernel space
     Execute Linux Command           echo 0 > /proc/sys/kernel/printk
 
     ${log}=                         Allocate Temporary File
-    # It was checked empirically that i2ctransfer process is executed on apu2.
-    # Determinism during the emulation is guaranteed by SerialExecution mode,
-    # but it may end up on a different core if the boot flow is changed or binaries modified.
-    Execute Command                 apu2 LogFile @${log}
+    # Linux is booted with `nr_cpus=1` to guarantee that i2ctransfer will be executed on apu0
+    Execute Command                 apu0 LogFile @${log}
     # Clear the TB cache so all instructions are translated and appear in the log
-    Execute Command                 apu2 ClearTranslationCache
+    Execute Command                 apu0 ClearTranslationCache
     Write Line To Uart              i2ctransfer -ya 1 w3@${I2C_ECHO_ADDRESS} 0x01 0x23 0x45 r2
     Wait For Line On Uart           0x01 0x23
     Wait For Prompt On Uart         ${LINUX_PROMPT}
-    Execute Command                 apu2 LogFile null
+    Execute Command                 apu0 LogFile null
     Check Exit Code
 
     # Assert that the TB log has no errors and includes A64 instructions (in the kernel),
@@ -406,11 +406,11 @@ Should Run Philosophers Sample
     Create Zephyr Machine           ${ZEPHYR_PHILOSOPHERS}
 
     FOR  ${p}  IN RANGE  0  5
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*7}STARVING${SPACE*7}                                    treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}HOLDING ONE FORK${SPACE*3}                            treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*2}EATING${SPACE*2}\\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}  treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}DROPPED ONE FORK${SPACE*3}                            treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE}THINKING \\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}           treatAsRegex=true 
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*7}STARVING${SPACE*7}                                    treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}HOLDING ONE FORK${SPACE*3}                            treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*2}EATING${SPACE*2}\\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}  treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}DROPPED ONE FORK${SPACE*3}                            treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE}THINKING \\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}           treatAsRegex=true
     END
 
 Should Interact Via Shell
@@ -594,11 +594,11 @@ Should Start And Stop Remoteproc
 
     # Check if demo works correctly
     FOR  ${p}  IN RANGE  0  5
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*7}STARVING${SPACE*7}                                    testerId=${zephyr_tester}  treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}HOLDING ONE FORK${SPACE*3}                            testerId=${zephyr_tester}  treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*2}EATING${SPACE*2}\\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}  testerId=${zephyr_tester}  treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}DROPPED ONE FORK${SPACE*3}                            testerId=${zephyr_tester}  treatAsRegex=true 
-            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE}THINKING \\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}           testerId=${zephyr_tester}  treatAsRegex=true 
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*7}STARVING${SPACE*7}                                    testerId=${zephyr_tester}  treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}HOLDING ONE FORK${SPACE*3}                            testerId=${zephyr_tester}  treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*2}EATING${SPACE*2}\\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}  testerId=${zephyr_tester}  treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE*3}DROPPED ONE FORK${SPACE*3}                            testerId=${zephyr_tester}  treatAsRegex=true
+            Wait For Line On Uart   Philosopher ${p} \\[[PC]:[ -]\\d\\] ${SPACE}THINKING \\[ ${SPACE}?\\d{1,3} ms \\]${SPACE}           testerId=${zephyr_tester}  treatAsRegex=true
     END
 
     # Stop demo
@@ -620,9 +620,9 @@ Should Run OpenAMP Echo Sample
     # Check if demo works correctly
     Wait For Line On Uart                   Echo Test Round 0                                                   testerId=${linux_tester}
     FOR  ${i}  IN RANGE  0  471
-            Wait For Line On Uart           sending payload number ${i} of size ${i + 17}                       testerId=${linux_tester}
-            Wait For Line On Uart           echo test: sent : ${i + 17}                                         testerId=${linux_tester}
-            Wait For Line On Uart           received payload number ${i} of size ${i + 17}                      testerId=${linux_tester}
+            Wait For Line On Uart           sending payload number ${i} of size ${i + 17}                       testerId=${linux_tester}  pauseEmulation=false
+            Wait For Line On Uart           echo test: sent : ${i + 17}                                         testerId=${linux_tester}  pauseEmulation=false
+            Wait For Line On Uart           received payload number ${i} of size ${i + 17}                      testerId=${linux_tester}  pauseEmulation=false
     END
     Wait For Line On Uart                   Echo Test Round 0 Test Results: Error count = 0                     testerId=${linux_tester}
 

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <thread>
+#include <inttypes.h>
 #ifdef __linux__
 #include <fcntl.h>
 #include <unistd.h>
@@ -167,7 +168,7 @@ static void print_renode_message(renode_message *message) {
     std::hash<std::thread::id> hasher;
     thread_id = hasher(std::this_thread::get_id());
   }
-  printf("[0x%08lX][RENODE MESSAGE] Action: ", thread_id);
+  printf("[0x%" PRIX64 "][RENODE MESSAGE] Action: ", thread_id);
   switch (message->action) {
   case INIT:
     printf("INIT");
@@ -190,8 +191,8 @@ static void print_renode_message(renode_message *message) {
   default:
     printf("INVALID");
   }
-  printf(" | Address: 0x%08lX", message->address);
-  printf(" | Payload: 0x%08lX", message->payload);
+  printf(" | Address: 0x%" PRIX64, message->address);
+  printf(" | Payload: 0x%" PRIX64, message->payload);
   printf(" | ConnIdx: %u\n", message->connection_index);
 }
 
@@ -259,7 +260,7 @@ static bool initialize_connection(CTCPClient *connection,
   // Acknowledge initialization is done.
   connection->Send((char *)message, sizeof(renode_message));
 #ifdef VERBOSE
-  printf("Connection to Renode initialized with timesync period %lu us.\n",
+  printf("Connection to Renode initialized with timesync period %" PRId64 " us.\n",
          *out_max_desync_us);
 #endif
   return true;
@@ -425,19 +426,21 @@ void renode_bridge::forward_loop() {
     } break;
     case renode_action::GPIOWRITE: {
       for (int i = 0; i < NUM_GPIO; ++i) {
-        sc_core::sc_interface *interface = gpio_ports_out[i].get_interface();
-        if (interface != nullptr) {
+        sc_core::sc_interface *iface = gpio_ports_out[i].get_interface();
+        if (iface != nullptr) {
           gpio_ports_out[i]->write((message.payload & (1 << i)) != 0);
         }
       }
       forward_connection->Send((char *)&message, sizeof(renode_message));
     } break;
     case renode_action::INIT: {
+      forward_connection->Disconnect();
+      backward_connection->Disconnect();
       terminate_simulation(0);
     } break;
     case renode_action::RESET: {
-      sc_core::sc_interface *interface = reset.get_interface();
-      if (interface != nullptr) {
+      sc_core::sc_interface *iface = reset.get_interface();
+      if (iface != nullptr) {
         reset->write(true);
       }
       forward_connection->Send((char *)&message, sizeof(renode_message));
@@ -493,8 +496,8 @@ void renode_bridge::on_port_gpio() {
 
     uint64_t gpio_state = 0;
     for (int i = 0; i < NUM_GPIO; ++i) {
-      sc_core::sc_interface *interface = gpio_ports_in[i].get_interface();
-      if (interface != nullptr) {
+      sc_core::sc_interface *iface = gpio_ports_in[i].get_interface();
+      if (iface != nullptr) {
         if (gpio_ports_in[i]->read()) {
           gpio_state |= (1ull << i);
         } else {

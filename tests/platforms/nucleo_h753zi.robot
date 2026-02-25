@@ -44,6 +44,23 @@ ${PTP_PLATFORM}=    SEPARATOR=${\n}
 ...    nvic:
 ...    ${SPACE*4}systickFrequency: 480000000  # Set frequency to match what software expects
 
+${SMMU_PLATFORM}=    SEPARATOR=${\n}
+...    using "${PLATFORM}"
+...    nvic:
+...    ${SPACE*4}systickFrequency: 480000000  # Set frequency to match what software expects
+...    smmu: MemoryControllers.ARM_SMMUv3 @ sysbus 0x53000000  # This peripheral is not a part of the real platform
+...    ethernet: @ {
+...    ${SPACE*4}sysbus 0x40028000;
+...    ${SPACE*4}sysbus new Bus.BusMultiRegistration { address: 0x40028C00; size: 0x200; region: "mtl" };
+...    ${SPACE*4}sysbus new Bus.BusMultiRegistration { address: 0x40029000; size: 0x200; region: "dma" };
+...    ${SPACE*4}smmu 16
+...    }
+
+
+${FLASH_WRITE_ADDRESS}              0x08040000
+${FLASH_WRITE_ERROR_HANDLER}        HAL_FLASH_OperationErrorCallback
+${FLASH_WRITE_ERROR_MSG}            Flash Write Error Detected
+
 *** Keywords ***
 Create Setup
     Execute Command                 emulation CreateSwitch "switch"
@@ -66,6 +83,14 @@ Create PTP Machine
     [Arguments]                     ${elf}  ${name}
     Execute Command                 mach create "${name}"
     Execute Command                 machine LoadPlatformDescriptionFromString """${PTP_PLATFORM}"""
+    Execute Command                 sysbus LoadELF @${elf}
+
+Create SMMU Machine
+    [Arguments]                     ${elf}  ${name}
+    Execute Command                 mach create "${name}"
+    Execute Command                 machine LoadPlatformDescriptionFromString """${SMMU_PLATFORM}"""
+    Execute Command                 include "${CURDIR}/nucleo_h753zi_helpers.py"
+    Execute Command                 setup_smmu 16
     Execute Command                 sysbus LoadELF @${elf}
 
 Assert PC Equals
@@ -271,6 +296,21 @@ Should Transmit PTP Frames
         Should Be True                  abs(${packet_milliseconds} - ${follow_up.Timestamp}) < 100
     END
 
+Should Transmit PTP Frames With SMMUv3 In Bypass Mode
+    Create SMMU Machine                 ${PTP}  smmu
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=True
+    Execute Command                     showAnalyzer ${UART}
+    Execute Command                     logLevel -1 smmu
+    Create Network Interface Tester     sysbus.ethernet
+
+    Wait For Line On Uart               ptp_port: ptp_port_init: Port 1 initialized
+    Start Emulation
+
+    # Wait for a PTP Sync message over UDP from 192.0.2.1:319 to 224.0.1.129:319
+    Wait For Outgoing Packet With Bytes At Index  0800__________________11____C0000201E0000181013F013F________0012  12  5  10
+    # Wait for a PTP Follow_Up message over UDP from 192.0.2.1:320 to 224.0.1.129:320 - which should be the next transmitted packet
+    Wait For Outgoing Packet With Bytes At Index  0800__________________11____C0000201E000018101400140________0812  12  1  1
+
 Should Encrypt And Decrypt Using DMA
     Create Machine                      ${CRYPTO_AES_DMA}  crypt
     Execute Command                     machine LoadPlatformDescriptionFromString ${EVAL_STUB}
@@ -294,3 +334,15 @@ Should Erase And Program Flash Memory
     # LED1 is set at the very end of the test, when the entire procedure is complete with no failures
     Assert LED State                    false    testerId=${led3_tester}
     Assert LED State                    true     testerId=${led1_tester}
+
+Should Manually Trigger Flash Error
+    Create Machine                      ${FLASH_EraseProgram}  flash
+    Create Log Tester                   5
+
+    # Set up hook to notify about error during write
+    Execute Command                     cpu AddHook `sysbus GetSymbolAddress "${FLASH_WRITE_ERROR_HANDLER}" cpu` "self.ErrorLog('${FLASH_WRITE_ERROR_MSG}')"
+
+    # Set up hook to trigger error on flash write
+    Execute Command                     sysbus AddWatchpointHook ${FLASH_WRITE_ADDRESS} DoubleWord Write "cpu.GetMachine()['sysbus.flashController'].TriggerOperationError(1)"
+
+    Wait For Log Entry                  ${FLASH_WRITE_ERROR_MSG}

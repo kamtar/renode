@@ -21,6 +21,17 @@ Create Platform
 
     Execute Command                 cpu PC ${START_PC}
 
+Create ARM Platform
+    [Arguments]                     ${type}=cortex-a53-gicv2
+    Execute Command                 using sysbus
+    Execute Command                 mach create "${type}"
+
+    Execute Command                 machine LoadPlatformDescriptionFromString "using \\"platforms/cpus/${type}.repl\\"; smmu: MemoryControllers.ARM_SMMUv3 @ sysbus 0xfd800000 { context: cpu }; cpu: @ { sysbus; smmu 29 }"
+    Execute Command                 machine LoadPlatformDescriptionFromString "highmem: Memory.MappedMemory @ sysbus 0x100000000 { size: 0x1000 }"
+    Execute Command                 include @tests/unit-tests/external-mmu.py
+
+    Execute Command                 cpu PC ${START_PC}
+
 Expect Value Read From Address
     [Arguments]                     ${address}  ${value}
     Execute Command                 cpu PC ${START_PC}
@@ -81,7 +92,7 @@ Setting MMU Window Parameters Before Enabling Throws
 Using Too High MMU Window Index Throws
     Create Platform
     Execute Command                 cpu EnableExternalWindowMmu true
-    Run Keyword And Expect Error    KeywordException: *There was an error executing command 'cpu SetMmuWindowAddend 256 256'Window index to high, maximum number: 255, got 256*
+    Run Keyword And Expect Error    CpuAbortException: Failed to find external MMU window with ID 256*
     ...  Execute Command            cpu SetMmuWindowAddend 256 0x100
 
 Read/Write From Address Outside The Defined MMU Windows Throws
@@ -120,17 +131,12 @@ Can Reset The Windows
     ${window1}=                     Define Window Using CPU API     0x1000  0x2000  0x100  ${PRIV_ALL}
     ${window2}=                     Define Window Using CPU API     0x2000  0x3000  0x100  ${PRIV_ALL}
     ${window3}=                     Define Window Using CPU API     0x3000  0x4000  0x100  ${PRIV_ALL}
-    Execute Command                 cpu ResetMmuWindow ${window2}
+    ${number_of_windows}=           Execute Command    cpu ExternalMmuWindowsCount
+    Should Be Equal As Integers     3  ${number_of_windows}
 
-    # Removed window
-    ${range_start}=                 Execute Command    cpu GetMmuWindowStart ${window2}
-    ${range_end}=                   Execute Command    cpu GetMmuWindowEnd ${window2}
-    ${addend}=                      Execute Command    cpu GetMmuWindowAddend ${window2}
-    ${priv}=                        Execute Command    cpu GetMmuWindowPrivileges ${window2}
-    Should Be Equal As Integers     0  ${range_start}  "Range start incorrect"
-    Should Be Equal As Integers     0  ${range_end}  "Range end incorrect"
-    Should Be Equal As Integers     0  ${addend}  "Range adden incorrect"
-    Should Be Equal As Integers     0  ${priv}  "Range privileges incorrect"
+    Execute Command                 cpu ResetMmuWindow ${window2}
+    ${number_of_windows}=           Execute Command    cpu ExternalMmuWindowsCount
+    Should Be Equal As Integers     2  ${number_of_windows}
 
     # Surrounding windows should remain untouched
     ${range_start}=                 Execute Command    cpu GetMmuWindowStart ${window1}
@@ -288,3 +294,17 @@ Works With The Last Page Of Memory
     Requires                        SingleMMU
     Define Typed Window Using CPU API  0x0  0x100000000  0x0  ${PRIV_EXEC_ONLY}  ${PRIV_EXEC_ONLY}
     Execute Command                 sysbus ReadWord 0xFFFFFFFF
+
+SMMUv3 Can Translate Accesses From CPU
+    Create ARM Platform            cortex-r52
+    Execute Command                setup_smmu 29
+    Execute Command                sysbus WriteDoubleWord 0x100000000 0xfeedface
+
+    ${prog}=                       Catenate  SEPARATOR=\n
+    ...                            // Identity mapping tested by the mere fact that this code can execute from 0x0.
+    ...                            mov r0, 0x1000
+    ...                            ldr r1, [r0]
+
+    Execute Command                cpu AssembleBlock 0 "${prog}"
+    Execute Command                cpu Step 2
+    Register Should Be Equal       R1  0xfeedface

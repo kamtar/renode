@@ -11,7 +11,7 @@ ${register_0}                 0x0
 ${illegal_opcode}             0x00008000
 ${illegal_csr}                0xf120d073
 ${nonexisting_csr}            0xfff0d073
-
+${divide_by_zero_flag}        ${{ 1 << 3 }}
 
 *** Keywords ***
 Create Machine
@@ -20,7 +20,7 @@ Create Machine
     Execute Command           mach create "risc-v"
 
     Execute Command           machine LoadPlatformDescriptionFromString "clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }"
-    Execute Command           machine LoadPlatformDescriptionFromString "cpu: CPU.RiscV${bitness} @ sysbus { timeProvider: clint; cpuType: \\"rv${bitness}gc\\" }"
+    Execute Command           machine LoadPlatformDescriptionFromString "cpu: CPU.RiscV${bitness} @ sysbus { timeProvider: clint; cpuType: \\"rv${bitness}gc_Zfh\\" }"
     Execute Command           machine LoadPlatformDescriptionFromString "mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }"
 
     IF    ${init_pc}
@@ -425,3 +425,53 @@ Should Properly Handle ResetVector After Creation And After Reset 32
 Should Properly Handle ResetVector After Creation And After Reset 64
     Create Machine                  bitness=64  init_pc=False
     Should Properly Handle ResetVector At Init And After Reset
+
+Should Set Flag On Single Precision Floating Point Division By Zero
+    [Tags]    floating-point
+    ${float32_zero}=                Set Variable  0xffffffff00000000
+    ${float32_one}=                 Set Variable  0xffffffff3F800000
+    ${float32_infinity}=            Set Variable  0xffffffff7f800000
+
+    Create Machine 64
+    
+    Execute Command                 cpu SetRegister "F0" ${float32_zero}
+    Execute Command                 cpu SetRegister "F1" ${float32_one}
+    Execute Command                 cpu SetRegister "F2" 0x0  # register where result will be stored
+    # Expected result: 1/0 = Infinity and Divide by Zero flag set.
+    Execute Command                 cpu AssembleBlock ${starting_pc} "fdiv.s f2, f1, f0"
+
+    Register Should Be Equal        F2  0x0
+    ${fflags}=  Execute Command     cpu GetRegister "FFLAGS"
+    Should Be True                  (${fflags} & ${divide_by_zero_flag}) == 0
+
+    Execute Command                 cpu Step
+    PC Should Be Equal              ${{ ${starting_pc} + 4 }}
+
+    Register Should Be Equal        F2  ${float32_infinity}
+    ${fflags}=  Execute Command     cpu GetRegister "FFLAGS"
+    Should Be True                  (${fflags} & ${divide_by_zero_flag}) != 0
+
+Should Set Flag On Half Precision Floating Point Division By Zero
+    [Tags]    floating-point
+    ${float16_zero}=                Set Variable  0xffffffffffff0000
+    ${float16_one}=                 Set Variable  0xffffffffffff3c00
+    ${float16_infinity}=            Set Variable  0xffffffffffff7c00
+
+    Create Machine 64
+    
+    Execute Command                 cpu SetRegister "F0" ${float16_zero}
+    Execute Command                 cpu SetRegister "F1" ${float16_one}
+    Execute Command                 cpu SetRegister "F2" 0x0  # register where result will be stored
+    # Expected result: 1/0 = Infinity and Divide by Zero flag set.
+    Execute Command                 cpu AssembleBlock ${starting_pc} "fdiv.h f2, f1, f0"
+
+    Register Should Be Equal        F2  0x0
+    ${fflags}=  Execute Command     cpu GetRegister "FFLAGS"
+    Should Be True                  (${fflags} & ${divide_by_zero_flag}) == 0
+
+    Execute Command                 cpu Step
+    PC Should Be Equal              ${{ ${starting_pc} + 4 }}
+
+    Register Should Be Equal        F2  ${float16_infinity}
+    ${fflags}=  Execute Command     cpu GetRegister "FFLAGS"
+    Should Be True                  (${fflags} & ${divide_by_zero_flag}) != 0

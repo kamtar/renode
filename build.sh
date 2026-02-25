@@ -3,6 +3,23 @@
 set -u
 set -e
 
+USE_PARALLEL=false
+if command -v env_parallel &> /dev/null
+then
+    # The env_parallel command stores ignored values in this variable
+    # so it needs to be defined for the `set -u` flag to not error
+    PARALLEL_IGNORED_NAMES=""
+    # Source the env_parallel init script
+    . env_parallel.bash
+    # If the `--session` start fails it mean that the installed
+    # version of GNU parallel is too old to have the features we need
+    if env_parallel --session &> /dev/null
+    then
+        USE_PARALLEL=true
+    fi
+fi
+
+
 ROOT_PATH="$(cd "$(dirname $0)"; echo $PWD)"
 export ROOT_PATH
 OUTPUT_DIRECTORY="$ROOT_PATH/output"
@@ -21,8 +38,8 @@ SKIP_FETCH=false
 EXTERNAL_LIB_ONLY=false
 TLIB_EXPORT_COMPILE_COMMANDS=false
 EXTERNAL_LIB_ARCH=""
-NET=false
-TFM="net462"
+NET=true
+TFM="net8.0"
 GENERATE_DOTNET_BUILD_TARGET=true
 PARAMS=()
 CUSTOM_PROP=
@@ -30,7 +47,7 @@ NET_FRAMEWORK_VER=
 RID="linux-x64"
 HOST_ARCH="i386"
 # Common cmake flags
-CMAKE_COMMON=""
+CMAKE_COMMON="${RENODE_EXTRA_CMAKE_ARGS:-}"
 
 function print_help() {
   echo "Usage: $0 [-cdvspnt] [-b properties-file.csproj] [--no-gui] [--skip-fetch] [--profile-build] [--external-lib-only] [--tlib-export-compile-commands] [--external-lib-arch <arch>] [--host-arch i386|aarch64] [--source-package] [-- <ARGS>]"
@@ -49,6 +66,7 @@ function print_help() {
   echo "--no-gui                          build with GUI disabled"
   echo "--force-net-framework-version     build against different version of .NET Framework than specified in the solution"
   echo "--net                             build with dotnet"
+  echo "--mono                            build with mono"
   echo "-B                                bundle target runtime (default value: $RID, requires --net, -t)"
   echo "-F                                select the target framework for which Renode should be built (default value: $TFM)"
   echo "--profile-build                   build optimized for profiling"
@@ -59,7 +77,7 @@ function print_help() {
   echo "--host-arch                       build with a specific tcg host architecture (default: i386)"
   echo "--skip-dotnet-target-generation   don't generate 'Directory.Build.targets' file, useful when experimenting with different build settings"
   echo "--tcg-opcode-backtrace            collect a backtrace for each emitted TCG opcode, to track internal TCG errors (implies Debug configuration)"
-  echo "<ARGS>                            arguments to pass to the build system"
+  echo "<ARGS>                            arguments to pass to the dotnet build system"
 }
 
 while getopts "cdvpnstb:o:B:F:-:" opt
@@ -118,9 +136,11 @@ do
           OPTIND=2
           ;;
         "net")
-          NET=true
-          TFM="net8.0"
-          PARAMS+=(p:NET=true)
+          echo "'--net' flag is a default, use --mono to target an old runtime"
+          ;;
+        "mono")
+          NET=false
+          TFM="net462"
           ;;
         "source-package")
           SOURCE_PACKAGE=true
@@ -295,6 +315,7 @@ then
   CS_COMPILER="dotnet build"
   TARGET="`get_path \"$PWD/Renode_NET.sln\"`"
   BUILD_TYPE="dotnet"
+  PARAMS+=(p:NET=true)
 else
   TARGET="`get_path \"$PWD/Renode.sln\"`"
   BUILD_TYPE="mono"
@@ -444,9 +465,9 @@ if $ON_LINUX && [[ "$HOST_ARCH" == "i386" ]] && [[ -z $EXTERNAL_LIB_ARCH || "${C
     popd > /dev/null
 fi
 
-# build tlib
-for core_config in "${CORES[@]}"
-do
+build_core () {
+    set -e
+    core_config=$1
     if [[ $core_config == *"kvm"* ]]; then
         continue
     fi
@@ -484,7 +505,20 @@ do
        command cp -v -f $CORE_DIR/compile_commands.json $CORES_PATH/tlib/
     fi
     popd > /dev/null
-done
+}
+
+# build tlib
+if $USE_PARALLEL
+then
+    echo "Starting parallel tlib build"
+    env_parallel build_core ::: "${CORES[@]}"
+    env_parallel --end-session
+else
+    for core_config in "${CORES[@]}"
+    do
+        build_core $core_config
+    done
+fi
 
 if $EXTERNAL_LIB_ONLY
 then
