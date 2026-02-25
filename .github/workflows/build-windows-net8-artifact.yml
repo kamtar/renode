@@ -21,7 +21,7 @@ jobs:
       - name: Build Windows net8.0 binaries
         shell: bash
         run: |
-          ./build.sh -t --no-gui --skip-fetch -- -maxcpucount:1
+          ./build.sh --no-gui
 
       - name: Upload Windows net8.0 binaries
         uses: actions/upload-artifact@v4
