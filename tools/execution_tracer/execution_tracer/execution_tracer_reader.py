@@ -35,6 +35,7 @@ FILE_VERSION = b"\x04"
 HEADER_LENGTH = 10
 MEMORY_ACCESS_LENGTH = 25
 RISCV_VECTOR_CONFIGURATION_LENGTH = 16
+BYTE_ORDER = "little"
 
 
 class AdditionalDataType(Enum):
@@ -42,6 +43,7 @@ class AdditionalDataType(Enum):
     MemoryAccess = 1
     RiscVVectorConfiguration = 2
     RiscVAtomicInstruction = 3
+    Registers = 4
 
 
 class MemoryAccessType(Enum):
@@ -124,7 +126,7 @@ def read_file(file: BinaryIO, disassemble: bool, llvm_disas_path: Optional[str])
 
 
 def bytes_to_hex(bytes: bytes, zero_padded=True) -> str:
-    integer = int.from_bytes(bytes, byteorder="little", signed=False)
+    integer = int.from_bytes(bytes, byteorder=BYTE_ORDER, signed=False)
     format_string = "0{}X".format(len(bytes)*2) if zero_padded else "X"
     return "0x{0:{fmt}}".format(integer, fmt=format_string)
 
@@ -208,7 +210,7 @@ class TraceData:
                 raise InvalidFileFormatException("Unexpected end of file")
             
             # The `instructions_left_in_block` counter is kept only for traces produced by cores that can switch between multiple modes.
-            self.instructions_left_in_block = int.from_bytes(block_length_raw, byteorder="little", signed=False)
+            self.instructions_left_in_block = int.from_bytes(block_length_raw, byteorder=BYTE_ORDER, signed=False)
 
         if self.uses_multiple_instruction_sets:
             self.instructions_left_in_block -= 1
@@ -242,6 +244,8 @@ class TraceData:
                 additional_data.append(self.parse_riscv_vector_configuration_data())
             elif additional_data_type is AdditionalDataType.RiscVAtomicInstruction:
                 additional_data.append(self.parse_riscv_atomic_instruction_data())
+            elif additional_data_type is AdditionalDataType.Registers:
+                additional_data.append(self.parse_registers_data())
 
             try:
                 additional_data_type = AdditionalDataType(self.file.read(1)[0])
@@ -306,6 +310,45 @@ class TraceData:
 
         prePostText = "after" if is_after_execution else "before"
         return f"AMO operands {prePostText} - RD: {rd}, RS1: {rs1} (memory value: {memory_value}), RS2: {rs2}"
+
+    def parse_registers_data(self) -> str:
+        text = ""
+        registers_data = []
+        try:
+            pre_opcode = bool.from_bytes(self.file.read(1), byteorder = BYTE_ORDER)
+            if pre_opcode:
+                text = " Pre: "
+            else:
+                text = "Post: "
+
+            registers_count = int.from_bytes(self.file.read(1), byteorder = BYTE_ORDER)
+            if registers_count == 0:
+                raise ValueError("can't read registers number")
+
+            for r in range(0, registers_count):
+                register_name_size = int.from_bytes(self.file.read(1), byteorder = BYTE_ORDER)
+                if register_name_size == 0:
+                    raise ValueError("register name size is 0")
+
+                try:
+                    register_name = self.file.read(register_name_size).decode("utf-8")
+                except UnicodeError:
+                    raise InvalidFileFormatException("can't decode register name")
+
+                width = int.from_bytes(self.file.read(1), byteorder = BYTE_ORDER)
+                if width == 0:
+                    raise ValueError("register size is 0")
+
+                value = self.file.read(width)
+                if (len(value) != width):
+                    raise ValueError("can't read register data")
+
+                registers_data.append(f"{register_name}: {bytes_to_hex(value, zero_padded=False)}")
+
+        except Exception as e:
+            raise InvalidFileFormatException("Invalid registers data, " + str(e))
+
+        return text + " | ".join(registers_data)
 
     def format_entry(self, entry: TraceEntry) -> str:
         (pc, opcode, additional_data, isa_mode) = entry
