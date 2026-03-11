@@ -152,6 +152,7 @@
 - tests/peripherals/LIS2DW12.robot
 - tests/unit-tests/arm-performance-monitoring-unit.robot
 - tests/peripherals/ARM_GenericInterruptController.robot
+- tests/peripherals/ARM_SBSA_UART.robot
 - tests/platforms/Versatile.robot
 - tests/unit-tests/arm-wfi-hook.robot
 - tests/platforms/Renesas_RA6M5.robot
@@ -183,6 +184,7 @@
 - tests/platforms/X86.robot
 - tests/platforms/ACRN.robot
 - tests/unit-tests/zephyr-mode.robot
+- tests/unit-tests/zephyr-ram-console.robot
 - tests/unit-tests/array_memory.robot
 - tests/unit-tests/riscv-zbb-extension.robot
 - tests/unit-tests/register-read-caching.robot
