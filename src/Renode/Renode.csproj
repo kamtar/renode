@@ -155,6 +155,16 @@
     <Compile Include="Network\ExternalControl\ADC.cs" />
     <Compile Include="Network\ExternalControl\GPIOPort.cs" />
     <Compile Include="Network\ExternalControl\SystemBus.cs" />
+    <Compile Include="WebSockets\WebSocketAPI.cs" />
+    <Compile Include="WebSockets\WebSocketStreamProxy.cs" />
+    <Compile Include="WebSockets\Utils.cs" />
+    <Compile Include="WebSockets\Misc\ButtonStateChangedEventDto.cs" />
+    <Compile Include="WebSockets\Misc\ExecRenodeActionArgs.cs" />
+    <Compile Include="WebSockets\Misc\PeripheralStateChangedEventDto.cs" />
+    <Compile Include="WebSockets\Misc\UartCreatedEventDto.cs" />
+    <Compile Include="WebSockets\Providers\EmulationInfoProvider.cs" />
+    <Compile Include="WebSockets\Providers\FilesystemProvider.cs" />
+    <Compile Include="WebSockets\Providers\RenodeGuiApiProvider.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <ProjectExtensions>
