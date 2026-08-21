@@ -8,12 +8,34 @@ import argparse
 import subprocess
 import yaml
 import multiprocessing
-from dataclasses import dataclass
+from typing import Any
+from pathlib import Path
+from enum import Enum
+import segmenting
+import monitoring
+import unstable_tests
 
 this_path = os.path.abspath(os.path.dirname(__file__))
 registered_handlers = []
 TestResult = namedtuple('TestResult', ('ok', 'log_file'))
 shared_suite_counter = None
+shared_active_suites = None
+
+DEFAULT_RENODE_BINARY_NAME = 'Renode.dll' if platform != 'win32' else 'RenodeWPF.dll'
+# Not a TestTag because it's not a real tag, it's the default.
+CRITICAL_TEST = 'mandatory'
+
+class TestTag(str, Enum):
+    SKIPPED = "skipped"
+    NON_CRITICAL = "non_critical"
+    UNSTABLE = "unstable"
+    RETRIED_ATTEMPT = "retried_attempt"
+
+    def __str__(self):
+        return self.value
+
+    def __format__(self, format_spec):
+        return format(self.value, format_spec)
 
 
 class IncludeLoader(yaml.SafeLoader):
@@ -96,6 +118,12 @@ def prepare_parser():
                         default=False,
                         help="Buildbot mode. Before running tests prepare environment, i.e., create tap0 interface.")
 
+    parser.add_argument("--dry-run",
+                        dest="dry_run",
+                        action="store_true",
+                        default=False,
+                        help="Loads the given tests and splits them into subsets (if --subsets is specified). Does not run any tests.")
+
     parser.add_argument("-t", "--tests",
                         dest="tests_file",
                         action="store",
@@ -127,9 +155,14 @@ def prepare_parser():
                         help="Run only tests marked with a tag.")
 
     parser.add_argument("--exclude",
-                        default=['skipped'],
+                        default=['excluded'],
                         action="append",
                         help="Do not run tests marked with a tag.")
+
+    parser.add_argument("--skip",
+                        default=['skipped'],
+                        action="append",
+                        help="Skip tests marked with a tag.")
 
     parser.add_argument("--stop-on-error",
                         dest="stop_on_error",
@@ -159,23 +192,8 @@ def prepare_parser():
                         default=None,
                         help="Generate perf.data from test in specified directory")
 
-    parser.add_argument("--runner",
-                        dest="runner",
-                        action="store",
-                        default=None,
-                        help=".NET runner.")
-
-    parser.add_argument("--net",
-                        dest="discarded",
-                        action="store_const",
-                        const="dotnet",
-                        help="Flag is deprecated and has no effect.")
-
-    parser.add_argument("--subset",
-                        dest="subset",
-                        default="1/1",
-                        type=subset,
-                        help="Run a subset of the tests. E.g. '1/2' for running half of the tests and '2/2' for the other half. This is useful when splitting up test execution between runners.")
+    unstable_tests.add_args(parser)
+    segmenting.add_args(parser)
 
     if platform != "win32":
         parser.add_argument("-p", "--port",
@@ -190,30 +208,9 @@ def prepare_parser():
                             default=False,
                             help="Suspend test waiting for a debugger.")
 
+    monitoring.add_args(parser)
+
     return parser
-
-
-@dataclass
-class Subset:
-    segment: int
-    max_segments: int
-
-    def __init__(self, segment: int, max_segments: int) -> None:
-        if segment <= 0 or segment > max_segments:
-            raise ValueError(f"`segment` must be > 0 and <= {max_segments} but it is {segment}")
-        if max_segments <= 0:
-            raise ValueError(f"`max_segments` must be at least 1 but it is {max_segments}")
-
-        self.segment = segment
-        self.max_segments = max_segments
-
-
-def subset(text: str) -> Subset: 
-    values = text.split("/")
-    if len(values) != 2:
-        raise ValueError("subset string format must be integer/integer")
-
-    return Subset(int(values[0]), int(values[1]))
 
 
 def call_or_die(to_call, error_message):
@@ -274,27 +271,27 @@ def handle_options(options):
 
     options.configuration = 'Debug' if options.debug_mode else 'Release'
 
+    if options.stats_file:
+        options.stats = segmenting.parse_stats_file(options.stats_file)
+    else:
+        options.stats = {}
+
+    if options.known_unstable_file:
+        options.known_unstable = unstable_tests.parse_file(options.known_unstable_file)
+        if options.tests:
+            unstable_tests.annotate_tests(options.tests, options.known_unstable)
+    else:
+        options.known_unstable = []
+
     if options.remote_server_full_directory is not None:
         if not os.path.isabs(options.remote_server_full_directory):
             options.remote_server_full_directory = os.path.join(this_path, options.remote_server_full_directory)
     else:
         options.remote_server_full_directory = os.path.join(options.remote_server_directory_prefix, options.configuration)
 
-    try:
-        # Try to infer the runner based on the build type
-        with open(os.path.join(options.remote_server_full_directory, "build_type"), "r") as f:
-            options.runner = f.read().strip()
-        if platform == "win32" and options.runner != "dotnet":
-            options.runner = "none" # .NET Framework applications run natively on Windows
-    except:
-        # Fallback to the explicitly provided runner or platform's default if nothing was passed
-        if options.runner is None:
-            options.runner = "mono" if platform.startswith("linux") or platform == "darwin" else "none"
-
     # Apply the dotnet telemetry optout in this script instead of the shell wrappers as it's
     # portable between OSes
-    if options.runner == 'dotnet':
-        os.putenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+    os.putenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
 
 
 def register_handler(handler_type, extension, creator, before_parsing=None, after_parsing=None):
@@ -309,6 +306,8 @@ def split_tests_into_groups(tests, test_type):
             return False
         for handler in registered_handlers:
             if (test_type == 'all' or handler['type'] == test_type) and path.endswith(handler['extension']):
+                # Ensure consistent path separators, even on Windows
+                path = Path(path).as_posix()
                 result.append(handler['creator'](path))
         return True
 
@@ -349,6 +348,7 @@ def configure_output(options):
 def run_test_group(args):
 
     global shared_suite_counter
+    global shared_active_suites
     group, total_number_of_suites, options = args
 
     iteration_counter = 0
@@ -372,6 +372,11 @@ def run_test_group(args):
             retry_suites_counter = 0
             should_retry_suite = True
             suite_failed = False
+
+            if shared_active_suites is None:
+                print("warning: `shared_active_suites` must be set for suite tracking to work")
+                shared_active_suites = []
+            shared_active_suites.append(suite.path)
 
             try:
                 while should_retry_suite and retry_suites_counter < options.retry_count:
@@ -400,6 +405,8 @@ def run_test_group(args):
                 import traceback
                 traceback.print_exception(e)
                 raise
+            finally:
+                shared_active_suites.remove(suite.path)
 
             if shared_suite_counter is None:
                 print("warning: `shared_suite_counter` must be set for suite counting to work")
@@ -432,11 +439,17 @@ def print_failed_tests(options):
                 for i, fail in enumerate(failed[what]):
                     print("\t{0}. {1}".format(i + 1, fail))
 
-            print("Failed {} critical tests:".format(handler['type']))
-            _print_helper('mandatory')
-            if 'non_critical' in failed and failed['non_critical']:
+            if CRITICAL_TEST in failed and failed[CRITICAL_TEST]:
+                print("Failed {} critical tests:".format(handler['type']))
+                _print_helper(CRITICAL_TEST)
+
+            if TestTag.UNSTABLE in failed and failed[TestTag.UNSTABLE]:
+                print("Failed {} unstable tests:".format(handler['type']))
+                _print_helper(TestTag.UNSTABLE)
+
+            if TestTag.NON_CRITICAL in failed and failed[TestTag.NON_CRITICAL]:
                 print("Failed {} non-critical tests:".format(handler['type']))
-                _print_helper('non_critical')
+                _print_helper(TestTag.NON_CRITICAL)
             print("------")
 
 def print_rerun_trace(options):
@@ -510,50 +523,80 @@ def failed_due_to_crash(options, groups_segment) -> bool:
     return False
 
 
-def segment_groups(options):
-    """
-    Splits the test groups into equally sized (best-effort) segments and returns the current one.
+def verify_suite_files_unique(groups: dict[str, Any]):
+    suite_file_paths = [
+        Path(suite.path) for suites in groups.values() for suite in suites
+    ]
 
-    Segment size and current segment is based on the values provided by the `--subset` option.
+    paths_by_filename = defaultdict(list)
+    for path in suite_file_paths:
+        paths_by_filename[path.name].append(path)
 
-    Remainder items are distributed into the first segments.
+    duplicates = {
+        filename: paths
+        for filename, paths in paths_by_filename.items()
+        if len(paths) > 1
+    }
 
-    E.g. splitting this array into 4 segments (remainders are marked with *):
-      input: [0, 1, 2, 3, 4, 5, 6, 7, 8*, 9*, 10*]
-    seg 1/4: [0, 1,  8*]
-    seg 2/4: [2, 3,  9*]
-    seg 3/4: [4, 5, 10*]
-    seg 4/4: [6, 7]
-    """
-    groups = list(options.tests.items()) # so we can slice it up
-    nr_groups = len(groups)
-    max_segments = options.subset.max_segments
-
-    # Make the chunk size small enough that each segment can have at least this many test groups.
-    chunk_size = nr_groups // max_segments # always rounds down
-    segment_num = options.subset.segment
-    segment_index = segment_num - 1 # input is 1-indexed, we want 0-indexed
-
-    # Split into "perfect" segments, ignoring the remainder.
-    segment_start_index = segment_index * chunk_size
-    groups_segment = groups[segment_start_index : segment_start_index + chunk_size]
-
-    # Get the nth remainder, unique per segment. 
-    # There cannot be more than one remainder per segment if they're distributed evenly,
-    # otherwise the chunk size would have been larger.
-    end_of_segments_index = max_segments * chunk_size
-    remainder_index = end_of_segments_index + segment_index
-    # We may have run out of remainders, so check that it exists before appending.
-    if remainder_index < nr_groups:
-        groups_segment.append(groups[remainder_index])
-
-    segment_test_file_paths = [suite.path for (_,suites) in groups_segment for suite in suites]
-    return segment_num, max_segments, segment_test_file_paths, groups_segment
+    if duplicates:
+        print("ERROR: Duplicate suite file names are not allowed. Found duplicates:")
+        for filename, paths in duplicates.items():
+            print(f"  {filename}:")
+            for path in paths:
+                print(f"    - {path}")
+        sys.exit(1)
 
 
-def init_worker_process(counter):
+def print_suite_files(segment: segmenting.GroupsSegment):
+    segment_num = segment.subset.segment
+    max_segments = segment.subset.max_segments 
+    segment_test_file_paths = segment.test_file_paths
+    groups_segment  = segment.groups
+
+    test_file_path_count = len(segment_test_file_paths)
+    suites_list_header = (
+        (
+            f"Will run segment {segment_num}/{max_segments}, "
+            f"consisting of the following {test_file_path_count} test files:"
+        )
+        if max_segments > 1
+        else f"Will run the following {test_file_path_count} test files:"
+    )
+    print(suites_list_header)
+
+    for group, suites in groups_segment:
+        is_group = not group.startswith("__NONE_")
+        padding = ""
+        if is_group:
+            print(f"  - {group}:")
+            padding = "  "
+        for suite in suites:
+            print(f"  {padding}- {suite.path}")
+
+    print("")
+
+
+def on_overload_detected():
+    if not shared_active_suites:
+        return
+
+    active_suite_count = len(shared_active_suites)
+    verb = "are" if active_suite_count > 1 else "is"
+    plural_s = "s" if active_suite_count > 1 else ""
+    print(
+        f"There {verb} {active_suite_count} currently running test suite{plural_s}:",
+        flush=True,
+    )
+    for suite in shared_active_suites:
+        print(f"  - {suite}", flush=True)
+    print("", flush=True)
+
+
+def init_worker_process(counter, active_suites):
     global shared_suite_counter
     shared_suite_counter = counter 
+    global shared_active_suites
+    shared_active_suites = active_suites
 
 
 def run():
@@ -574,21 +617,26 @@ def run():
 
     configure_output(options)
 
+    verify_suite_files_unique(options.tests)
+
     print("Preparing suites")
 
+    segment = segmenting.segment_groups(options)
+    segment_num = segment.subset.segment
+    max_segments = segment.subset.max_segments 
+    segment_test_file_paths = segment.test_file_paths
+    groups_segment  = segment.groups
+    total_number_of_suites = len(segment_test_file_paths) * options.iteration_count
+
+    print_suite_files(segment)
+
+    if options.dry_run:
+        print("Exiting early due to --dry-run")
+        exit(0)
+
     args = []
-    segment_num, max_segments, segment_test_file_paths, groups_segment = segment_groups(options)
-    total_number_of_suites = len(segment_test_file_paths)
     for (_, group_suites) in groups_segment:
         args.append((group_suites, total_number_of_suites, options))
-
-    test_file_path_count = len(segment_test_file_paths)
-    if max_segments > 1: 
-        print(
-          f"Will run segment {segment_num}/{max_segments}, "
-          f"consisting of the following {test_file_path_count} test files:"
-        )
-        [print(f"  - {path}") for path in segment_test_file_paths]
 
     for (group, _) in groups_segment:
         for suite in options.tests[group]:
@@ -604,28 +652,57 @@ def run():
     # the value is restored later
     options.output = None
 
+    # Prepare job inputs
     if options.jobs == 1:
         global shared_suite_counter
         shared_suite_counter = 0
-        tests_failed, logs = zip(*map(run_test_group, args))
+        global shared_active_suites
+        shared_active_suites = []
+        pool = None
     else:
         multiprocessing.set_start_method("spawn")
         # To share a counter between all the worker processes, we must create a 
         # multiprocessing.Value that gets passed to each worker process through
         # its initializer function (by assigning a global variable).
         shared_suite_counter_object = multiprocessing.Value('i', 0)
+        # Like the counter, we need to use a multiprocessing.Manager to create
+        # a shared list that keeps track of the currently running suites.
+        shared_active_suites = multiprocessing.Manager().list()
         pool = multiprocessing.Pool(
             initializer=init_worker_process, 
-            initargs=(shared_suite_counter_object,), # args must be a tuple
+            initargs=(shared_suite_counter_object, shared_active_suites), 
             processes=options.jobs,
         )
+
+    # Start monitoring
+    if options.enable_system_load_monitoring:
+        system_monitor = monitoring.SystemLoadMonitor(
+            options.system_load_sample_interval_seconds,
+            options.system_load_spike_factor,
+            options.system_load_window_size,
+            options.ram_warn_threshold_percentage,
+            options.cpu_warn_threshold_percentage,
+            on_overload_detected,
+        )
+        system_monitor.start()
+    else:
+        system_monitor = None
+
+    # Run test job(s)
+    if options.jobs == 1:
+        tests_failed, logs = zip(*map(run_test_group, args))
+    else:
+        assert pool, "Pool must have been instantiated at this point"
         # this get is a hack - see: https://stackoverflow.com/a/1408476/980025
         # we use `async` + `get` in order to allow "Ctrl+C" to be handled correctly;
         # otherwise it would not be possible to abort tests in progress
-        tests_failed, logs = zip(*pool.map_async(run_test_group, args).get(999999))
+        tests_failed, logs = zip(*pool.map_async(run_test_group, args, chunksize=1).get(999999))
         pool.close()
         print("Waiting for all processes to exit")
         pool.join()
+
+    if system_monitor:
+        system_monitor.stop()
 
     tests_failed = any(tests_failed)
     logs = set().union(*logs)
@@ -650,11 +727,14 @@ def run():
     if options.output is not sys.stdout:
         options.output.close()
 
-    if max_segments > 1: 
-        print( f"Ran segment {segment_num}/{max_segments}, consisting of {test_file_path_count} test files.")
+    if max_segments > 1:
+        print( f"Ran segment {segment_num}/{max_segments}, consisting of {total_number_of_suites} test files.")
     if tests_failed:
         print("Some tests failed :( See the list of failed tests below and logs for details!")
-        print_failed_tests(options)
+
+    print_failed_tests(options)
+
+    if tests_failed:
         print_rerun_trace(options)
         if test_failed_due_to_crash:
             print('Renode crashed during testing and caused a failure', file=sys.stderr)

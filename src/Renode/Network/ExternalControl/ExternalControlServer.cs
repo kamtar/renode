@@ -8,14 +8,12 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
+using System.Threading;
 
 using Antmicro.Renode.Core;
-using Antmicro.Renode.Exceptions;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Network.ExternalControl;
 using Antmicro.Renode.Utilities;
-using Antmicro.Renode.Utilities.Packets;
 
 namespace Antmicro.Renode.Network
 {
@@ -31,193 +29,169 @@ namespace Antmicro.Renode.Network
     {
         public ExternalControlServer(int port)
         {
-            socketServerProvider.BufferSize = 0x10;
-
-            commandHandlers = new CommandHandlerCollection();
-            commandHandlers.EventReported += SendEventResponse;
-            commandHandlers.Register(new RunFor(this));
-            commandHandlers.Register(new GetTime(this));
-            commandHandlers.Register(new ADC(this));
-            commandHandlers.Register(new GPIOPort(this));
-            commandHandlers.Register(new SystemBus(this));
-
-            var getMachineHandler = new GetMachine(this);
-            Machines = getMachineHandler;
-            commandHandlers.Register(getMachineHandler);
-
-            socketServerProvider.ConnectionAccepted += delegate
+            socketProvider.BufferSize = 0x10;
+            socketProvider.ConnectionAccepted += delegate
             {
-                lock(locker)
+                lock(socketProvider)
                 {
                     if(state == State.Disposed)
                     {
                         return;
                     }
-                    this.Log(LogLevel.Noisy, "State change: {0} -> {1}", state, State.Handshake);
-                    state = State.Handshake;
+                    this.Log(LogLevel.Noisy, "State change: {0} -> {1}", state, State.WaitingForHeader);
+                    state = State.WaitingForHeader;
                 }
+
+                InitializeHandlers();
                 this.Log(LogLevel.Debug, "Connection established");
             };
-            socketServerProvider.ConnectionClosed += delegate
+            socketProvider.ConnectionClosed += delegate
             {
-                lock(locker)
+                lock(socketProvider)
                 {
                     if(state == State.Disposed)
                     {
                         return;
                     }
-                    commandHandlers.ClearActivation();
                     this.Log(LogLevel.Noisy, "State change: {0} -> {1}", state, State.NotConnected);
                     state = State.NotConnected;
                 }
+
+                ClearHandlers();
                 this.Log(LogLevel.Debug, "Connection closed");
             };
 
-            socketServerProvider.DataBlockReceived += OnBytesWritten;
-            socketServerProvider.Start(port);
+            socketProvider.DataBlockReceived += OnBytesWritten;
+            socketProvider.Start(port);
 
             this.Log(LogLevel.Info, "{0}: Listening on port {1}", nameof(ExternalControlServer), port);
         }
 
         public void Dispose()
         {
-            lock(locker)
+            State lastState;
+            lock(socketProvider)
             {
+                lastState = state;
                 this.Log(LogLevel.Noisy, "State change: {0} -> {1}", state, State.Disposed);
                 state = State.Disposed;
             }
-            commandHandlers.Dispose();
-            socketServerProvider.Stop();
+
+            socketProvider.Stop();
+
+            if(lastState != State.NotConnected && lastState != State.Disposed)
+            {
+                ClearHandlers();
+            }
         }
 
-        public IMachineContainer Machines { get; }
-
-        public bool EventsEnabled = false;
-
-        private bool IsHeaderValid()
+        public ICommand GetCommandHandler(Command command)
         {
-            if(!header.HasValue)
-            {
-                return false;
-            }
-
-            if(header.Value.Magic != Magic)
-            {
-                return false;
-            }
-
-            if(header.Value.DataSize > (uint)Int32.MaxValue)
-            {
-                return false;
-            }
-
-            return true;
+            return commandHandlers.GetHandler(command);
         }
 
-        private bool TryActivateCommands(List<byte> data)
+        public MessagePayload SendRequest(MessagePayload request)
         {
-            foreach(var pair in data.Split(2))
+            var handler = GetHandlerForCurrentThread();
+            try
             {
-                var command = (Command)pair[0];
-                var version = pair[1];
-
-                if(commandHandlers.TryActivate(command, version))
+                // External handler is used only by Default Thread Handler
+                if(handler != externalHandler)
                 {
-                    this.Log(LogLevel.Noisy, "{0} (version 0x{1:X}) activated", command, version);
-                    continue;
+                    Monitor.Enter(handler);
                 }
 
-                var message = commandHandlers.TryGetVersion(command, out var expectedVersion)
-                    ? $"Encountered invalid version (0x{version:X}) for {command}, expected 0x{expectedVersion:X}"
-                    : $"Encountered unknown command 0x{command:X}";
-
-                this.Log(LogLevel.Error, message);
-                SendResponse(Response.FatalError(message));
-                return false;
+                var response = handler.SendRequest(request, disposeCancelationTokenSource.Token);
+                return response;
             }
+            catch(OperationCanceledException)
+            {
+                throw new ServerDisposedException();
+            }
+            finally
+            {
+                if(handler != externalHandler)
+                {
+                    Monitor.Exit(handler);
+                }
+            }
+        }
 
-            return true;
+        public void SendMessage(Message message)
+        {
+            var bytes = message.ToBytes();
+            lock(socketProvider)
+            {
+                AssertNotDisposed();
+                socketProvider.Send(bytes);
+            }
+            this.Log(LogLevel.Debug, "Message sent: {0}", message);
+        }
+
+        public IMachineContainer Machines { get; private set; }
+
+        private void InitializeHandlers()
+        {
+            commandHandlers = new CommandHandlerCollection();
+            commandHandlers.Register(new TimeElapsedCallbackCommand(this));
+            commandHandlers.Register(new RunFor(this));
+            commandHandlers.Register(new GetTime(this));
+            commandHandlers.Register(new ADC(this));
+            commandHandlers.Register(new GPIOPort(this));
+            commandHandlers.Register(new SystemBus(this));
+            commandHandlers.Register(new CheckVersion(this));
+
+            var getMachineHandler = new GetMachine(this);
+            Machines = getMachineHandler;
+
+            commandHandlers.Register(getMachineHandler);
+            disposeCancelationTokenSource = new();
+
+            externalHandler = new CommunicationHandler(true, this);
+            internalHandler = new CommunicationHandler(false, this);
+            defaultHandlerThread = new Thread(DefaultThreadHandlerBody)
+            {
+                Name = GetType().Name + "_DefaultHandlerThread",
+                IsBackground = true
+            };
+            defaultHandlerThread.Start(disposeCancelationTokenSource.Token);
+        }
+
+        private void ClearHandlers()
+        {
+            disposeCancelationTokenSource.Cancel();
+            defaultHandlerThread.Join();
+            internalHandler = null;
+            externalHandler = null;
+
+            commandHandlers.Dispose();
+            commandHandlers = null;
+
+            disposeCancelationTokenSource.Dispose();
         }
 
         private State? StepReceiveFiniteStateMachine(State currentState)
         {
             switch(currentState)
             {
-            case State.Handshake:
-                if(buffer.Count < HandshakeHeaderSize)
-                {
-                    return null;
-                }
-                commandsToActivate = BitConverter.ToUInt16(buffer.GetRange(0, HandshakeHeaderSize).ToArray(), 0);
-                buffer.RemoveRange(0, HandshakeHeaderSize);
-                this.Log(LogLevel.Noisy, "{0} commands to activate", commandsToActivate);
-
-                return State.WaitingForHandshakeData;
-
-            case State.WaitingForHandshakeData:
-                if(commandsToActivate > 0 && buffer.Count >= 2)
-                {
-                    var toActivate = (int)Math.Min(commandsToActivate, buffer.Count / 2);
-
-                    lock(locker)
-                    {
-                        AssertNotDisposed();
-                        if(!TryActivateCommands(buffer.GetRange(0, toActivate * 2)))
-                        {
-                            socketServerProvider.Stop();
-                            return null;
-                        }
-                    }
-
-                    buffer.RemoveRange(0, toActivate * 2);
-                    commandsToActivate -= toActivate;
-                }
-
-                if(commandsToActivate > 0)
-                {
-                    return null;
-                }
-
-                SendResponse(Response.SuccessfulHandshake());
-
-                return State.WaitingForHeader;
-
             case State.WaitingForHeader:
-                if(buffer.Count < HeaderSize)
+                if(!Message.TryDecodeHeader(buffer, out currentMessage))
                 {
                     return null;
                 }
 
-                header = Packet.Decode<ExternalControlProtocolHeader>(buffer);
-                if(!IsHeaderValid())
-                {
-                    var message = $"Encountered invalid header: {header}";
-                    this.Log(LogLevel.Error, message);
-                    lock(locker)
-                    {
-                        SendResponse(Response.FatalError(message));
-                        socketServerProvider.Stop();
-                    }
-                    return null;
-                }
-
-                this.Log(LogLevel.Noisy, "Received header: {0}", header);
-                buffer.RemoveRange(0, HeaderSize);
+                this.Log(LogLevel.Noisy, "Received header: {0}", currentMessage);
 
                 return State.WaitingForData;
 
             case State.WaitingForData:
-                if(buffer.Count < header.Value.DataSize)
+                if(!currentMessage.TryDecodePayload(buffer))
                 {
                     return null;
                 }
 
-                TryHandleCommand(out var response, header.Value.Command, buffer.GetRange(0, (int)header.Value.DataSize));
-
-                buffer.RemoveRange(0, (int)header.Value.DataSize);
-                header = null;
-
-                SendResponse(response);
+                this.Log(LogLevel.Debug, "Message received: {0}", currentMessage);
+                GetHandlerForMessage(currentMessage).PutMessage(currentMessage);
 
                 return State.WaitingForHeader;
 
@@ -230,8 +204,6 @@ namespace Antmicro.Renode.Network
         private void OnBytesWritten(byte[] data)
         {
             buffer.AddRange(data);
-            this.Log(LogLevel.Noisy, "Received new data: {0}", Misc.PrettyPrintCollectionHex(data));
-            this.Log(LogLevel.Debug, "Current buffer: {0}", Misc.PrettyPrintCollectionHex(buffer));
 
             var lockedState = state;
             while(lockedState != State.Disposed && lockedState != State.NotConnected)
@@ -246,7 +218,7 @@ namespace Antmicro.Renode.Network
                     return;
                 }
 
-                lock(locker)
+                lock(socketProvider)
                 {
                     if(!nextState.HasValue || state == State.Disposed || state == State.NotConnected)
                     {
@@ -259,68 +231,6 @@ namespace Antmicro.Renode.Network
             }
         }
 
-        private bool TryHandleCommand(out Response response, Command command, List<byte> data)
-        {
-            ICommand commandHandler;
-            lock(locker)
-            {
-                AssertNotDisposed();
-                commandHandler = commandHandlers.GetHandler(command);
-            }
-
-            if(commandHandler == null)
-            {
-                response = Response.InvalidCommand(command);
-                return true;
-            }
-
-            try
-            {
-                // Create an ICanReportEvents interface or something similar if
-                // we ever have more command handlers that need to do this.
-                if(commandHandler is RunFor)
-                {
-                    EventsEnabled = true;
-                }
-
-                response = commandHandler.Invoke(data);
-                return true;
-            }
-            catch(RecoverableException e)
-            {
-                this.Log(LogLevel.Error, "{0} command error: {1}", command, e.Message);
-                response = Response.CommandFailed(command, e.Message);
-                return false;
-            }
-            finally
-            {
-                if(commandHandler is RunFor)
-                {
-                    EventsEnabled = false;
-                }
-            }
-        }
-
-        private void SendEventResponse(Response response)
-        {
-            if(EventsEnabled)
-            {
-                SendResponse(response);
-            }
-        }
-
-        private void SendResponse(Response response)
-        {
-            var bytes = response.GetBytes();
-            lock(locker)
-            {
-                AssertNotDisposed();
-                socketServerProvider.Send(bytes);
-            }
-            this.Log(LogLevel.Debug, "Response sent: {0}", response);
-            this.Log(LogLevel.Noisy, "Bytes sent: {0}", Misc.PrettyPrintCollectionHex(bytes));
-        }
-
         private void AssertNotDisposed()
         {
             if(state == State.Disposed)
@@ -329,31 +239,49 @@ namespace Antmicro.Renode.Network
             }
         }
 
+        private void DefaultThreadHandlerBody(object obj)
+        {
+            var cancelationToken = (CancellationToken)obj;
+
+            try
+            {
+                while(true)
+                {
+                    externalHandler.HandleRequestsUntilResponse(cancelationToken);
+                }
+            }
+            catch(OperationCanceledException)
+            {
+                // It is expected to be thrown while disposing the server
+            }
+        }
+
+        private CommunicationHandler GetHandlerForMessage(Message message) =>
+            message.IsExternallyInitiated ? externalHandler : internalHandler;
+
+        private CommunicationHandler GetHandlerForCurrentThread() =>
+            defaultHandlerThread.ManagedThreadId == Environment.CurrentManagedThreadId ? externalHandler : internalHandler;
+
         private State state = State.NotConnected;
-        private int commandsToActivate = 0;
-        private ExternalControlProtocolHeader? header;
+        private Message currentMessage;
+        private Thread defaultHandlerThread;
+        private CommunicationHandler externalHandler;
+        private CommunicationHandler internalHandler;
+        private CancellationTokenSource disposeCancelationTokenSource;
+        private CommandHandlerCollection commandHandlers;
 
         private readonly List<byte> buffer = new List<byte>();
-        private readonly CommandHandlerCollection commandHandlers;
-        private readonly SocketServerProvider socketServerProvider = new SocketServerProvider(telnetMode: false);
-
-        private readonly object locker = new object();
-
-        private const int HeaderSize = 7;
-        private const int HandshakeHeaderSize = 2;
-        private const string Magic = "RE";
+        private readonly SocketServerProvider socketProvider = new SocketServerProvider(telnetMode: false);
 
         private class CommandHandlerCollection : IDisposable
         {
             public CommandHandlerCollection()
             {
                 commandHandlers = new Dictionary<Command, ICommand>();
-                activeCommandHandlers = new Dictionary<Command, ICommand>();
             }
 
             public void Dispose()
             {
-                activeCommandHandlers.Clear();
                 foreach(var command in commandHandlers.Values.OfType<IDisposable>())
                 {
                     command.Dispose();
@@ -364,111 +292,23 @@ namespace Antmicro.Renode.Network
             public void Register(ICommand command)
             {
                 commandHandlers.Add(command.Identifier, command);
-                if(command is IHasEvents commandWithEvents)
-                {
-                    commandWithEvents.EventReported += this.EventReported;
-                }
-            }
-
-            public void ClearActivation()
-            {
-                activeCommandHandlers.Clear();
-            }
-
-            public bool TryActivate(Command id, byte version)
-            {
-                if(activeCommandHandlers.ContainsKey(id))
-                {
-                    return false;
-                }
-
-                if(!commandHandlers.TryGetValue(id, out var command))
-                {
-                    return false;
-                }
-
-                if(command.Version != version)
-                {
-                    return false;
-                }
-
-                activeCommandHandlers.Add(command.Identifier, command);
-                return true;
             }
 
             public ICommand GetHandler(Command id)
             {
-                if(!activeCommandHandlers.TryGetValue(id, out var command))
+                if(!commandHandlers.TryGetValue(id, out var command))
                 {
                     return null; ;
                 }
                 return command;
             }
 
-            public bool TryGetVersion(Command id, out byte version)
-            {
-                if(!commandHandlers.TryGetValue(id, out var command))
-                {
-                    version = default(byte);
-                    return false;
-                }
-
-                version = command.Version;
-                return true;
-            }
-
-            public event Action<Response> EventReported;
-
             private readonly Dictionary<Command, ICommand> commandHandlers;
-            private readonly Dictionary<Command, ICommand> activeCommandHandlers;
-        }
-
-        private class ServerDisposedException : RecoverableException
-        {
-            public ServerDisposedException()
-                : base()
-            {
-            }
-        }
-
-        [LeastSignificantByteFirst]
-        private struct ExternalControlProtocolHeader
-        {
-            public override string ToString()
-            {
-                return $"{{ magic: {Misc.PrettyPrintCollectionHex(MagicField)} ({Magic}), command: 0x{(byte)Command} ({Command}), dataSize: {DataSize} }}";
-            }
-
-            public string Magic
-            {
-                get
-                {
-                    try
-                    {
-                        return Encoding.ASCII.GetString(MagicField);
-                    }
-                    catch
-                    {
-                        return "<invalid>";
-                    }
-                }
-            }
-
-#pragma warning disable 649
-            [PacketField, Width(bytes: 2)]
-            public byte[] MagicField;
-            [PacketField, Width(bits: 8)]
-            public Command Command;
-            [PacketField, Width(bits: 32)]
-            public uint DataSize;
-#pragma warning restore 649
         }
 
         private enum State
         {
             NotConnected,
-            Handshake,
-            WaitingForHandshakeData,
             WaitingForHeader,
             WaitingForData,
             Disposed,

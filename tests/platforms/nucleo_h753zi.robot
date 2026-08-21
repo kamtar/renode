@@ -7,7 +7,7 @@ ${UART}                             sysbus.usart3
 ${PROJECT_URL}                      https://dl.antmicro.com/projects/renode
 ${ECHO_SERVER}                      ${PROJECT_URL}/zephyr-nucleo_h753zi_echo_server.elf-s_3820436-2a55e73d28b438666b588d87cc9822365ee46cf6
 ${ECHO_CLIENT}                      ${PROJECT_URL}/zephyr-nucleo_h753zi_echo_client.elf-s_3773508-692f892b406f5a4a0aedb4afe120acd26f420d21
-${BLINKY}                           ${PROJECT_URL}/zephyr--nucleo-h753zi-blinky.elf-s_586204-d9aa33947652eb18930088c06704ad6a8cdc7fa4
+${BLINKY}                           ${PROJECT_URL}/nucleo_h753zi--zephyr-blinky.elf-s_500660-f5a73e7bbe7222f296429488cf720df331624cda
 ${BUTTON}                           ${PROJECT_URL}/zephyr--nucleo_h753zi_button_sample.elf-s_582696-3d5e6775a24c75e8fff6b812d5bc850b361e3d93
 ${CRYPTO_GCM}                       ${PROJECT_URL}/stm32cubeh7--stm32h753zi-CRYP_AESGCM.elf-s_2136368-45a90683e4f954667a464fc8fa9ce57d0b74ac09
 ${CRYPTO_GCM_IT}                    ${PROJECT_URL}/stm32cubeh7--stm32h753zi-CRYP_AESGCM_IT.elf-s_2137876-ee038aa93bf68cb91af9894e0be9584eec3057e5
@@ -16,7 +16,13 @@ ${QSPI_RW}                          ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI
 ${QSPI_MemMapped}                   ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_MemoryMapped.elf-s_2152312-faec8bb984c61aabb52ae9eec1598999ea906a1c
 ${QSPI_XIP}                         ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_ExecuteInPlace.elf-s_2233412-67befe44572c483b242a95ce8e714f75f4e7dc69
 ${PTP}                              ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_net_ptp.elf-s_4678660-79097838e7a15377e3d9ce083917220bd0705312
+${DHCP}                             ${PROJECT_URL}/nucleo_h753zi--zephyr-dhcp_client_server.elf-s_5285644-738a986f7b4250cd1a615e5c9767be20d89d82e0  # Zephyr netshell with DHCP client and server enabled
 ${FLASH_EraseProgram}               ${PROJECT_URL}/stm32cubeh7--stm32h753zi-FLASH_EraseProgram.elf-s_2098720-fdf4d20c82c0619eee844117860017b477696298
+${ADC_DMA_TEST}                     ${PROJECT_URL}/nucleo_h753zi--zephyr-tests_adc_api_dma.elf-s_1463928-1eb236532e593e96e263d98cf6200a0722dfd97f
+${FLASH_IS25WP}                     ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_drivers_spi_flash.elf-s_642604-754f4c58cbd5ac817f6c77f5533ea3d9b83bb276
+${CAN_COUNTER}                      ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_drivers_can_counter.elf-s_1324504-cc26c0ba1b4285b189ee6d73641ab3c81a5e6bdf
+${CUBEMX_ETH_TEST}                  ${PROJECT_URL}/cubemx--stm32h7-eth-test.elf-s_1231644-3e808bfc20a3a96ad304acbc94c7dbd6b06245e5
+${INTERRUPT_TEST}                   ${PROJECT_URL}/nucleo_h753zi--zephyr-tests_arm_interrupt.elf-s_1910156-ef375658d70a341eea0d85fab970d4ddac9f22d4
 
 ${PLATFORM}                         platforms/boards/nucleo_h753zi.repl
 
@@ -39,15 +45,8 @@ ${EXTERNAL_FLASH}=   SEPARATOR=
 ...    qspiMappedFlashMemory: Memory.MappedMemory @ sysbus 0x90000000 { size: 0x10000000 }  ${\n}
 ...    """
 
-${PTP_PLATFORM}=    SEPARATOR=${\n}
-...    using "${PLATFORM}"
-...    nvic:
-...    ${SPACE*4}systickFrequency: 480000000  # Set frequency to match what software expects
-
 ${SMMU_PLATFORM}=    SEPARATOR=${\n}
 ...    using "${PLATFORM}"
-...    nvic:
-...    ${SPACE*4}systickFrequency: 480000000  # Set frequency to match what software expects
 ...    smmu: MemoryControllers.ARM_SMMUv3 @ sysbus 0x53000000  # This peripheral is not a part of the real platform
 ...    ethernet: @ {
 ...    ${SPACE*4}sysbus 0x40028000;
@@ -56,18 +55,29 @@ ${SMMU_PLATFORM}=    SEPARATOR=${\n}
 ...    ${SPACE*4}smmu 16
 ...    }
 
+${MOCKS}=    SEPARATOR=${\n}
+...    """
+...    slave1: Mocks.DummyI2CSlave @ i2c1 0x42
+...    slave2: Mocks.DummyI2CSlave @ i2c1 0x43
+...    """
+
+
+${EXTERNAL_IS25WP_FLASH}=  SEPARATOR=${\n}
+...    externalQspiFlash: SPI.ISSI_IS25WP @ qspi { underlyingMemory: qspiMappedFlashMemory; }
+...    qspiMappedFlashMemory: Memory.MappedMemory @ sysbus 0x90000000 { size: 0x8000000; }
 
 ${FLASH_WRITE_ADDRESS}              0x08040000
 ${FLASH_WRITE_ERROR_HANDLER}        HAL_FLASH_OperationErrorCallback
 ${FLASH_WRITE_ERROR_MSG}            Flash Write Error Detected
 
 *** Keywords ***
-Create Setup
+Create Connected Machines
+    [Arguments]                     ${elf_server}  ${elf_client}
     Execute Command                 emulation CreateSwitch "switch"
 
-    Create Machine                  ${ECHO_SERVER}  server
+    Create Machine                  ${elf_server}  server
     Execute Command                 connector Connect sysbus.ethernet switch
-    Create Machine                  ${ECHO_CLIENT}  client
+    Create Machine                  ${elf_client}  client
     Execute Command                 connector Connect sysbus.ethernet switch
 
 Create Machine
@@ -77,12 +87,6 @@ Create Machine
     Execute Command                 mach set "${name}"
     Execute Command                 machine LoadPlatformDescription @${PLATFORM}
 
-    Execute Command                 sysbus LoadELF @${elf}
-
-Create PTP Machine
-    [Arguments]                     ${elf}  ${name}
-    Execute Command                 mach create "${name}"
-    Execute Command                 machine LoadPlatformDescriptionFromString """${PTP_PLATFORM}"""
     Execute Command                 sysbus LoadELF @${elf}
 
 Create SMMU Machine
@@ -98,9 +102,13 @@ Assert PC Equals
     ${pc}=                 Execute Command  sysbus.cpu PC
     Should Be Equal As Integers  ${pc}  ${expected}
 
+Wait For Test Pass
+    [Arguments]                     ${test_name}
+    Wait For Line On Uart            PASS - ${testname}.*    treatAsRegex=true
+
 *** Test Cases ***
 Should Talk Over Ethernet
-    Create Setup
+    Create Connected Machines       ${ECHO_SERVER}  ${ECHO_CLIENT}
     ${server}=  Create Terminal Tester          ${UART}  machine=server  defaultPauseEmulation=True
     ${client}=  Create Terminal Tester          ${UART}  machine=client  defaultPauseEmulation=True
 
@@ -187,6 +195,7 @@ Should Program Flash With QSPI
     # This sample is built for STM32 Evaluation Kit, which uses the same SoC but has a bit different HW - we only care about LEDs to signal test status
     Execute Command                 machine LoadPlatformDescriptionFromString ${EVAL_STUB}
     Execute Command                 machine LoadPlatformDescriptionFromString ${EXTERNAL_FLASH}
+    Execute Command                 machine LoadPlatformDescriptionFromString ${MOCKS}
 
     ${led3_tester}=                 Create LED Tester   sysbus.gpioPortA.led3     defaultTimeout=1
     ${led1_tester}=                 Create LED Tester   sysbus.gpioPortF.led1     defaultTimeout=1
@@ -259,7 +268,7 @@ Should Program Flash With QSPI and use XIP
     Assert PC Equals                0x90000010
 
 Should Read Correct Time From the PTP Clock
-    Create PTP Machine              ${PTP}  ptp
+    Create Machine                  ${PTP}  ptp
     Create Terminal Tester          ${UART}  defaultPauseEmulation=True
     # Use AdvanceImmediately to make the RunFor take less real time
     Execute Command                 emulation SetGlobalAdvanceImmediately true
@@ -274,7 +283,7 @@ Should Read Correct Time From the PTP Clock
     Wait For Line On Uart           32.48
 
 Should Transmit PTP Frames
-    Create PTP Machine              ${PTP}  ptp
+    Create Machine                  ${PTP}  ptp
     Create Terminal Tester          ${UART}  defaultPauseEmulation=True
     Create Network Interface Tester  sysbus.ethernet
 
@@ -369,3 +378,100 @@ Should Passthrough Characters Via Uart Hub
         Send Key To Uart                    ${ch}  testerId=${tester-1}
         Wait For Bytes On Uart              ${hexch}  testerId=${tester-0}
     END
+
+UART Hub Should Flip Bits
+    Execute Command                     i @scripts/multi-node/uart_hub_nucleo_h753.resc
+
+    ${tester-0}=                        Create Terminal Tester  sysbus.usart3  machine=m0
+    ${tester-1}=                        Create Terminal Tester  sysbus.usart3  machine=m1
+
+    Execute Command                     emulation SetSeed 3333
+    Execute Command                     uartHub BitFlipRate 1
+    Execute Command                     uartHub MaximumFlippedBits 2
+
+    # Wait for the sample to boot
+    Execute Command                     emulation RunFor "0.01"
+
+    # dotnet does not guarantee that the algorithm used to generate random numbers won't change between
+    # major versions: https://learn.microsoft.com/en-us/dotnet/api/system.random?view=net-8.0#notes-to-callers
+    # so even with a set seed we can't expect the bits to be flipped in the exact same way, so instead
+    # the test just check if a different message appeared on the second UART to what was transmitted from
+    # the first UART.
+    Write To Uart                       Hello, world!  testerId=${tester-0}
+    Should Not Be On Uart               Hello, world!  testerId=${tester-1}  includeUnfinishedLine=true  timeout=1
+
+Should Resolve DHCP and Be Pingable
+    Create Connected Machines           ${DHCP}  ${DHCP}
+    ${server}=  Create Terminal Tester  ${UART}  defaultPauseEmulation=True  machine=server
+    ${client}=  Create Terminal Tester  ${UART}  defaultPauseEmulation=True  machine=client
+
+    Set Test Variable                   ${server_ip}  122.101.101.1
+
+    Wait For Prompt on Uart             uart:~$  testerId=${server}
+    Write Line To Uart                  net dhcpv4 client stop 1  testerId=${server}
+    Write Line To Uart                  net ipv4 del 1 192.0.2.1  testerId=${server}
+    Write Line To Uart                  net ipv4 add 1 ${server_ip} 255.255.255.0  testerId=${server}
+    Write Line To Uart                  net dhcpv4 server start 1 122.101.101.2  testerId=${server}
+    Wait For Line on Uart               DHCPv4 server started on interface 1  testerId=${server}
+
+    ${client_ip}=  Wait For Line On Uart  net_dhcpv4: Received: ([\\d.]+)  treatAsRegex=true  testerId=${client}  timeout=15
+    ${client_ip}=  Set Variable         ${client_ip.Groups[0]}
+
+    Wait For Prompt on Uart             uart:~$  testerId=${client}
+    Write Line To Uart                  net ping ${server_ip}  testerId=${client}
+    Wait For Line On Uart               28 bytes from ${server_ip}.*  treatAsRegex=true  testerId=${client}
+
+    Write Line To Uart                  net ping ${client_ip}  testerId=${server}
+    Wait For Line On Uart               28 bytes from ${client_ip}.*  treatAsRegex=true  testerId=${server}
+
+Should Pass ADC DMA Test
+    Create Machine                      ${ADC_DMA_TEST}  adc_dma_test
+    Create Terminal Tester              ${UART}                                       defaultPauseEmulation=True
+
+    Wait For Test Pass                  test_adc_asynchronous_call
+    Wait For Test Pass                  test_adc_invalid_request
+    Wait For Test Pass                  test_adc_repeated_samplings
+    Wait For Test Pass                  test_adc_sample_one_channel
+    Wait For Test Pass                  test_adc_sample_two_channels
+    Wait For Test Pass                  test_adc_sample_with_interval
+    Wait For Test Pass                  test_task_different_priorities_sequences
+
+Should Read and Write IS25WP Flash
+    Create Machine                      ${FLASH_IS25WP}  flash
+    Execute Command                     machine LoadPlatformDescriptionFromString """${EXTERNAL_IS25WP_FLASH}"""
+
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=true
+    Wait For Line on Uart               qspi-nor-flash@0 SPI flash testing
+    Wait For Line on Uart               Perform test on single sector
+    Wait For Line on Uart               Flash erase succeeded!
+    Wait For Line on Uart               Data read matches data written. Good!!
+    Wait For Line on Uart               Perform test on multiple consecutive sectors
+    Wait For Line on Uart               Flash erase succeeded!
+    Wait For Line on Uart               Data read matches data written. Good!!
+
+Should Hear Loopback CAN Messages
+    Create Machine                      ${CAN_COUNTER}  can
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=True
+    Wait For Line On Uart               Counter received: 0
+    Wait For Line On Uart               Counter received: 1
+    Wait For Line On Uart               Counter received: 2
+
+Should Have Ethernet as Link Up in CubeMX
+    Create Machine                      ${CUBEMX_ETH_TEST}  eth
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=True
+    Wait For Line On Uart               netif link up
+
+Should Pass Interrupt Test
+    Create Machine                      ${INTERRUPT_TEST}   interrupt_test
+    Create Terminal Tester              ${UART}                                       defaultPauseEmulation=True
+
+    Wait For Test Pass                  test_arm_esf_collection
+
+    # test_arm_interrupt verifies Zephyr correctly handles kernel oops, panic, asserts
+    # and MSTKERR late-arriving exception
+    Wait For Test Pass                  test_arm_interrupt
+
+    # test_arm_null_pointer_exception test is skipped
+
+    # test_arm_user_interrupt verifies that `MRS` hides registers in unpriviledged mode
+    Wait For Test Pass                  test_arm_user_interrupt

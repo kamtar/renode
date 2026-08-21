@@ -119,11 +119,11 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
 
         public static readonly Parser<string> LocalKeyword = MakeKeyword("local");
 
-        public static readonly Parser<string> PrefixedKeyword = MakeKeyword("prefixed");
-
         public static readonly Parser<bool> TrueKeyword = MakeKeyword("true", true);
+        public static readonly Parser<bool> TrueKeywordTitleCase = MakeKeyword("True", true);
 
         public static readonly Parser<bool> FalseKeyword = MakeKeyword("false", false);
+        public static readonly Parser<bool> FalseKeywordTitleCase = MakeKeyword("False", false);
 
         public static readonly Parser<Value> NoneKeyword = MakeKeyword("none", (Value)null);
 
@@ -155,12 +155,12 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
         public static readonly Parser<UsingEntry> Using =
             (from usingKeyword in UsingKeyword
              from filePath in SingleLineQuotedString.Select(x => new StringWithPosition(x)).Positioned()
-             from prefixedKeyword in PrefixedKeyword.Then(x => SingleLineQuotedString).Named("using prefix").Optional()
-             select new UsingEntry(filePath, prefixedKeyword.GetOrDefault())).Token().Positioned().Named("using entry");
+             from separator in Separator.AtLeastOnce().XOptional()
+             select new UsingEntry(filePath)).Token().Positioned().Named("using entry");
 
         public static readonly Parser<IEnumerable<UsingEntry>> Usings =
             (from firstUsing in Using
-             from rest in Separator.Then(x => Using).Many()
+             from rest in Using.Many()
              select new[] { firstUsing }.Concat(rest));
 
         public static readonly Parser<RangeValue> Range =
@@ -193,7 +193,11 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
         public static readonly Parser<ReferenceValue> ReferenceValue = Identifier.Select(x => new ReferenceValue(x)).Named("reference");
 
         public static readonly Parser<BoolValue> BoolValue =
-            TrueKeyword.Or(FalseKeyword).Select(x => new BoolValue(x)).Named("bool");
+            TrueKeyword
+            .Or(TrueKeywordTitleCase)
+            .Or(FalseKeyword)
+            .Or(FalseKeywordTitleCase)
+            .Select(x => new BoolValue(x)).Named("bool");
 
         public static readonly Parser<ListValue> EmptyList =
             (from opening in OpeningSquareBracket
@@ -209,19 +213,37 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
 
         public static readonly Parser<ListValue> ListValue = NonEmptyList.Or(EmptyList);
 
-        public static readonly Parser<Value> Value = (SingleLineQuotedString.Or(MultilineQuotedString)).Select(x => new StringValue(x))
-                                                                 .XOr<Value>(Range)
-                                                                 .XOr(Number.Select(x => new NumericalValue(x)))
-                                                                 .XOr(ObjectValue)
-                                                                 .XOr(ListValue)
-                                                                 .Or(Enum)
-                                                                 .Or(BoolValue)
-                                                                 .Or(ReferenceValue)
-                                                                 .Positioned();
+        public static readonly Parser<Value> ScalarValue = (SingleLineQuotedString.Or(MultilineQuotedString)).Select(x => new StringValue(x))
+                                                            .XOr<Value>(Range)
+                                                            .XOr(Number.Select(x => new NumericalValue(x)))
+                                                            .Or(Enum)
+                                                            .Or(BoolValue)
+                                                            .Or(ReferenceValue)
+                                                            .Positioned();
+
+        public static readonly Parser<KeyValuePair> KeyValuePair =
+            (from key in ScalarValue.Named("dictionary key")
+             from colon in Colon
+             from value in Value.Named("dictionary value")
+             select new KeyValuePair(key, value)).Named("dictionary entry");
+
+        public static readonly Parser<DictValue> DictValue =
+            (from opening in OpeningBrace.Named("start of dictionary")
+             from pairs in KeyValuePair.DelimitedBy(Separator).XOptional()
+             from trailing in Separator.Optional()
+             from closing in ClosingBrace.Named("end of dictionary")
+             select new DictValue(pairs.GetOrDefault())).Named("dictionary");
+
+        public static readonly Parser<Value> NonDictValue = ScalarValue
+                                                            .XOr(ObjectValue)
+                                                            .XOr(ListValue)
+                                                            .Positioned();
+
+        public static readonly Parser<Value> Value = NonDictValue.XOr(DictValue).Positioned();
 
         public static readonly Parser<RegistrationInfo> RegistrationInfoInner =
             (from register in ReferenceValue.Named("register reference").Positioned()
-             from registrationPoint in Value.XOptional().Named("registration point")
+             from registrationPoint in NonDictValue.XOptional().Named("registration point")
              select new RegistrationInfo(register, registrationPoint.GetOrDefault())).Named("registration info");
 
         public static readonly Parser<RegistrationInfo> RegistrationInfo = AtSign.Then(x => RegistrationInfoInner);
@@ -235,7 +257,8 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
             (from atSign in AtSign
              from brace in OpeningBrace.Named("registration infos list")
              from first in RegistrationInfoInner
-             from rest in Separator.Then(x => RegistrationInfoInner).XMany()
+             from rest in Separator.Then(x => RegistrationInfoInner).Many()
+             from tail in Separator.Optional()
              from closingBrace in ClosingBrace.Named("registration infos list end")
              select new[] { first }.Concat(rest));
 
@@ -402,7 +425,8 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
 
         public static readonly Parser<IEnumerable<Attribute>> AttributesInner =
             (from firstAttribute in Attribute
-             from rest in Separator.Then(x => Attribute).XMany()
+             from rest in Separator.Then(x => Attribute).Many()
+             from tail in Separator.Optional()
              select new[] { firstAttribute }.Concat(rest));
 
         public static readonly Parser<IEnumerable<Attribute>> Attributes =

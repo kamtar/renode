@@ -8,9 +8,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
-#if !NET
-using Antmicro.Renode.Exceptions;
-#endif
 using Antmicro.Renode.Peripherals;
 using Antmicro.Renode.Peripherals.Bus;
 using Antmicro.Renode.Utilities;
@@ -24,11 +21,16 @@ namespace Antmicro.Renode.Network.ExternalControl
             Instances = new InstanceCollection<IPeripheral>();
         }
 
-        public Response Invoke(IPeripheral instance, List<byte> commandData)
+        public MessagePayload Invoke(IPeripheral instance, List<byte> commandData)
         {
+            if(commandData.Count > 0 && (Operation)commandData[0] == Operation.GetName)
+            {
+                return PerformGetName(instance);
+            }
+
             if(commandData.Count < (int)MinimumPayloadSize)
             {
-                return Response.CommandFailed(Identifier, $"Expected at least {MinimumPayloadSize + InstanceBasedCommandHeaderSize} bytes of payload");
+                return MessagePayload.Error(Identifier, $"Expected at least {MinimumPayloadSize + InstanceBasedCommandHeaderSize} bytes of payload");
             }
 
             var operation = (Operation)commandData[0];
@@ -61,42 +63,40 @@ namespace Antmicro.Renode.Network.ExternalControl
             }
             else
             {
-                return Response.CommandFailed(Identifier,
+                return MessagePayload.Error(Identifier,
                     $"Invalid instance type: {instance.GetType().Name}, expected {nameof(IPeripheral)} or {nameof(IBusController)}");
             }
 
             switch(operation)
             {
             case Operation.Read:
-                return Response.Success(Identifier, PerformRead(sysbus, context, address, accessWidth, dataCount));
+                return MessagePayload.Success(Identifier, PerformRead(sysbus, context, address, accessWidth, dataCount));
             case Operation.Write:
                 var writeData = commandData.GetRange(MinimumPayloadSize, (int)DataCountToByteCount(accessWidth, dataCount));
                 PerformWrite(sysbus, context, address, accessWidth, writeData.ToArray());
-                return Response.Success(Identifier);
+                return MessagePayload.Success(Identifier);
             default:
                 throw new UnreachableException();
             }
         }
 
-        public override Response Invoke(List<byte> data) => this.InvokeHandledWithInstance(data);
+        public override MessagePayload Invoke(List<byte> data) => this.InvokeHandledWithInstance(data);
 
         public override Command Identifier => Command.SystemBus;
 
-        public override byte Version => 0x0;
-
         public InstanceCollection<IPeripheral> Instances { get; }
 
-        private bool ValidateParameters(Operation op, AccessWidth width, ulong dataSize, List<byte> commandData, out Response error)
+        private bool ValidateParameters(Operation op, AccessWidth width, ulong dataSize, List<byte> commandData, out MessagePayload error)
         {
             if(!Enum.IsDefined(typeof(Operation), op))
             {
-                error = Response.CommandFailed(Identifier, $"Invalid system bus operation: {op}");
+                error = MessagePayload.Error(Identifier, $"Invalid system bus operation: {op}");
                 return false;
             }
 
             if(!Enum.IsDefined(typeof(AccessWidth), width))
             {
-                error = Response.CommandFailed(Identifier, $"Invalid access width: {width}");
+                error = MessagePayload.Error(Identifier, $"Invalid access width: {width}");
                 return false;
             }
 
@@ -108,11 +108,11 @@ namespace Antmicro.Renode.Network.ExternalControl
 
             if(commandData.Count != (int)expectedCommandSize)
             {
-                error = Response.CommandFailed(Identifier, $"Expected {expectedCommandSize + InstanceBasedCommandHeaderSize} bytes of payload");
+                error = MessagePayload.Error(Identifier, $"Expected {expectedCommandSize + InstanceBasedCommandHeaderSize} bytes of payload");
                 return false;
             }
 
-            error = null;
+            error = default;
             return true;
         }
 
@@ -185,6 +185,18 @@ namespace Antmicro.Renode.Network.ExternalControl
             }
         }
 
+        private MessagePayload PerformGetName(IPeripheral instance)
+        {
+            try
+            {
+                return MessagePayload.Success(Identifier, instance.GetName());
+            }
+            catch(Exception e)
+            {
+                return MessagePayload.Error(Identifier, $"Failed to obtain the name of the peripheral: {e.Message}");
+            }
+        }
+
         private const int InstanceBasedCommandHeaderSize = IInstanceBasedCommandExtensions.HeaderSize;
 
         private const int MinimumPayloadSize =
@@ -197,6 +209,7 @@ namespace Antmicro.Renode.Network.ExternalControl
         {
             Read = 0,
             Write = 1,
+            GetName = 2,
         }
 
         private enum AccessWidth : byte

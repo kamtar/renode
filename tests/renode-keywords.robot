@@ -14,7 +14,7 @@ ${CONFIGURATION}             Release
 ${PORT_NUMBER}               9999
 ${DIRECTORY}                 ${CURDIR}/../output/bin/${CONFIGURATION}
 ${RENODETOOLS}               ${CURDIR}/../tools
-${BINARY_NAME}               Renode.exe
+${BINARY_NAME}               Renode.dll
 ${HOTSPOT_ACTION}            None
 ${DISABLE_GUI}               False
 ${DEFAULT_UART_TIMEOUT}      8
@@ -23,7 +23,6 @@ ${SAVE_LOGS}                 True
 ${SAVE_LOGS_WHEN}            Fail
 ${HOLD_ON_ERROR}             False
 ${CREATE_EXECUTION_METRICS}  False
-${NET_PLATFORM}              False
 ${PROFILER_PROCESS}          None
 
 *** Keywords ***
@@ -46,30 +45,6 @@ Setup
         File Should Exist    ${DIRECTORY}/${BINARY_NAME}  msg=Robot Framework remote server binary not found (${DIRECTORY}/${BINARY_NAME}). Did you forget to build it in ${CONFIGURATION} configuration?
     END
 
-    # this handles starting on Linux/macOS using mono launcher
-    IF  not ${SKIP_RUNNING_SERVER} and not ${SERVER_REMOTE_DEBUG} and not '${SYSTEM}' == 'Windows' and not ${NET_PLATFORM}
-        Start Process  mono  ${BINARY_NAME}  @{PARAMS}  cwd=${DIRECTORY}
-    END
-
-    # this handles starting on Windows without an explicit launcher
-    # we use 'shell=true' to execute process from current working directory
-    IF  not ${SKIP_RUNNING_SERVER} and not ${SERVER_REMOTE_DEBUG} and '${SYSTEM}' == 'Windows'
-        Start Process  ${BINARY_NAME}  @{PARAMS}  cwd=${DIRECTORY}  shell=true
-    END
-    
-    # this handles starting on all platforms with dotnet launcher
-    # we use 'shell=true' to execute process from current working directory
-    IF  not ${SKIP_RUNNING_SERVER} and not ${SERVER_REMOTE_DEBUG} and ${NET_PLATFORM}
-        Start Process  dotnet ${BINARY_NAME}  @{PARAMS}  cwd=${DIRECTORY}  shell=true
-    END
-
-    IF  not ${SKIP_RUNNING_SERVER} and ${SERVER_REMOTE_DEBUG} and not '${SYSTEM}' == 'Windows' and not ${NET_PLATFORM}
-        Start Process  mono
-          ...            --debug
-          ...            --debugger-agent\=transport\=dt_socket,address\=0.0.0.0:${SERVER_REMOTE_PORT},server\=y,suspend\=${SERVER_REMOTE_SUSPEND}
-          ...            ${BINARY_NAME}  @{PARAMS}  cwd=${DIRECTORY}
-    END
-
     IF  not ${SKIP_RUNNING_SERVER} and ${SERVER_REMOTE_DEBUG} and '${SYSTEM}' == 'Windows'
          Fatal Error  Windows doesn't support server remote debug option.
     END
@@ -77,12 +52,12 @@ Setup
     #The distinction between operating systems is because localhost is not universally understood on Linux and 127.0.0.1 is not always available on Windows.
     IF  not '${SYSTEM}' == 'Windows'
         Wait Until Keyword Succeeds  60s  1s
-          ...   Import Library  Remote  http://127.0.0.1:${PORT_NUMBER}/
+          ...   Import Library  Remote  http://127.0.0.1:${PORT_NUMBER}/    AS  Renode
     END
 
     IF  '${SYSTEM}' == 'Windows'
         Wait Until Keyword Succeeds  60s  1s
-          ...   Import Library  Remote  http://localhost:${PORT_NUMBER}/
+          ...   Import Library  Remote  http://localhost:${PORT_NUMBER}/    AS  Renode
     END
 
     Setup Renode
@@ -122,26 +97,28 @@ Sanitize Test Name
     ${test_name}=      Replace String Using Regexp  ${test_name}  [/""]  -
     RETURN             ${test_name}
 
+Get Sanitized Test Name
+    ${retry_index}=    Get Variable Value   \${RETRYFAILED_RETRY_INDEX}  0
+    ${test_name}=      Set Variable  ${SUITE NAME}.${TEST NAME}.fail${retry_index}
+    ${test_name}=      Sanitize Test Name  ${test_name}
+    RETURN             ${test_name}
+
 Create Snapshot Of Failed Test
     Return From Keyword If   'skipped' in @{TEST TAGS}
 
-    ${retry_index}=    Get Variable Value   \${RETRYFAILED_RETRY_INDEX}  0
-    ${test_name}=      Set Variable  ${SUITE NAME}.${TEST NAME}.fail${retry_index}.save
-    ${test_name}=      Sanitize Test Name  ${test_name}
+    ${test_name}=      Get Sanitized Test Name
 
     ${snapshots_dir}=  Set Variable  ${RESULTS_DIRECTORY}/snapshots
     Create Directory   ${snapshots_dir}
 
-    ${snapshot_path}=  Set Variable  "${snapshots_dir}/${test_name}"
+    ${snapshot_path}=  Set Variable  "${snapshots_dir}/${test_name}.save"
     Execute Command  Save ${snapshot_path}
     Log To Console   !!!!! Emulation's state saved to ${snapshot_path}
 
 Save Test Log
     Return From Keyword If   'skipped' in @{TEST TAGS}
 
-    ${retry_index}=    Get Variable Value   \${RETRYFAILED_RETRY_INDEX}  0
-    ${test_name}=      Set Variable  ${SUITE NAME}.${TEST NAME}.fail${retry_index}
-    ${test_name}=      Sanitize Test Name  ${test_name}
+    ${test_name}=      Get Sanitized Test Name
 
     ${logs_dir}=       Set Variable  ${RESULTS_DIRECTORY}/logs
     Create Directory   ${logs_dir}
@@ -200,20 +177,8 @@ Test Teardown
 Hot Spot
     Handle Hot Spot  ${HOTSPOT_ACTION}
 
-Start Profiler Or Skip
-    IF  not ${NET_PLATFORM}
-        Fail                   Failed to run profiler. Available only for .NET platform.  skipped
-    END
-
-    Start Profiler
-
 Start Profiler
-    IF  not ${NET_PLATFORM}
-        Fail                   Failed to run profiler. Available only for .NET platform.
-    END
-
-    ${test_name}=               Set Variable  ${SUITE NAME}.${TEST NAME}
-    ${test_name}=               Sanitize Test Name  ${test_name}
+    ${test_name}=               Get Sanitized Test Name
 
     ${traces_dir}=              Set Variable  ${RESULTS_DIRECTORY}/traces
     Create Directory            ${traces_dir}
@@ -230,4 +195,67 @@ Stop Profiler
     IF  ${PROFILER_PROCESS}
         Terminate Process           ${PROFILER_PROCESS}
         Set Test Variable           ${PROFILER_PROCESS}  None
+    END
+
+Dump Registers Range
+    [Tags]  robot:private
+    [Arguments]     ${Device}   ${End}  ${Start}=0
+    ${Dump}=        Create Dictionary
+
+    FOR     ${index}    IN RANGE    ${Start}    ${End}+1    4
+        ${RegValue}=    Execute Command     ${Device} ReadDoubleWord ${index}
+        ${RegValue}=    Remove String   ${RegValue}     \n   # Remove newlines to make diff output more readable
+        Set To Dictionary   ${Dump}     ${index}    ${RegValue}
+    END
+    RETURN  ${Dump}
+
+Dump Devices Registers
+    [Documentation]     Dump devices' registers values into a dictionary of dictionary
+    ...                 ``{'device':{reg_offset:reg_value}}`` from a dictionary of ``devices:list of
+    ...                 offset ranges``.
+    ...
+    ...                 Dumping registers when there is a gap in the model may work and simplify the
+    ...                 test case.
+    ...
+    ...                 Example:
+    ...                 | ${RegistersToDump} = | Create Dictionary      | adc1=${{ [(0x0, 0xC4), (0x308, 0x308)] }} |
+    ...                 | &{Dump} =            | Dump Devices Registers | ${RegistersToDump} |
+    ...
+    ...                 Please not the usage of inline python evaluation ``${{}}`` to keep tuples
+    ...                 instead of having strings.
+    [Arguments]     ${DevicesAndRanges}
+    ${Dump}=        Create Dictionary
+
+    FOR     ${Device}   ${Ranges}    IN  &{DevicesAndRanges}
+        FOR     ${Range}    IN  @{Ranges}
+            ${RegsDump}=    Dump Registers Range  ${Device}    ${Range}[1]    ${Range}[0]
+            Set To Dictionary   ${Dump}     ${Device}=${RegsDump}
+            Log Dictionary  ${Dump}
+        END
+    END
+    RETURN  ${Dump}
+
+Devices Registers Dump Should Be Equal
+    [Documentation]     Compare dumps returned by Dump Devices Registers.
+    [Arguments]         ${DumpA}    ${DumpB}    ${NameDumpA}=DumpA  ${NameDumpB}=DumpB
+
+    ${DevicesA}=    Get Dictionary Keys     ${DumpA}
+    ${DevicesB}=    Get Dictionary Keys     ${DumpB}
+
+    TRY
+        Dictionaries Should Be Equal    ${DumpA}    ${DumpB}
+    EXCEPT
+        # On error, printing the whole device:'registers_dump' dictionary entry is hard to read. So
+        # instead, let's compare device by device to print the first
+        FOR     ${device}   IN  @{DevicesA}
+            ${DeviceDumpA}=     Get From Dictionary     dictionary=${DumpA}     key=${device}
+            ${DeviceDumpB}=     Get From Dictionary     dictionary=${DumpB}     key=${device}
+            TRY
+                Dictionaries Should Be Equal    ${DeviceDumpA}     ${DeviceDumpB}
+            EXCEPT
+                CONTINUE
+            END
+        END
+        FAIL    ${NameDumpA} and ${NameDumpB} dumps differ, see logs of previous for loop for
+        ...     more details on which entries are different.
     END

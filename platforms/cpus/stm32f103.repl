@@ -63,27 +63,20 @@ nvicInput40: Miscellaneous.CombinedInput @ none
 
 gpioPortA: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010800, +0x400>
     invertedAFPins: [[7, 1]]
-    [0-15] -> exti@[0-15]
 
 gpioPortB: GPIOPort.STM32F1GPIOPort @ sysbus <0x40010C00, +0x400>
     invertedAFPins: [[13, 1], [14, 1], [15, 1], [0, 1], [1, 1]]
-    [0-15] -> exti@[0-15]
 
 gpioPortC: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011000, +0x400>
-    [0-15] -> exti@[0-15]
 
 gpioPortD: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011400, +0x400>
-    [0-15] -> exti@[0-15]
 
 gpioPortE: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011800, +0x400>
     invertedAFPins: [[8, 1], [10, 1], [12, 1]]
-    [0-15] -> exti@[0-15]
 
 gpioPortF: GPIOPort.STM32F1GPIOPort @ sysbus <0x40011C00, +0x400>
-    [0-15] -> exti@[0-15]
 
 gpioPortG: GPIOPort.STM32F1GPIOPort @ sysbus <0x40012000, +0x400>
-    [0-15] -> exti@[0-15]
 
 timer1: Timers.STM32_Timer @ sysbus 0x40012c00
     BreakInterrupt -> nvic@24
@@ -184,6 +177,7 @@ dma2: DMA.STM32G0DMA @ sysbus 0x40020400
 
 afio: GPIOPort.STM32F1AFIO @ sysbus 0x40010000
     gpioPorts: [gpioPortA, gpioPortB, gpioPortC, gpioPortD, gpioPortE, gpioPortF, gpioPortG]
+    [0-15] -> exti@[0-15]
 
 // Alternate function connections
 // The syntax is:
@@ -231,6 +225,64 @@ timer13:
 
 timer14:
     0 -> gpioPortA#07@14 | gpioPortF#09@14
+
+gpioPortA:
+    0 -> timer2@00
+    1 -> timer2@01
+    2 -> timer2@02 | timer9@00
+    3 -> timer2@03 | timer5@03 | timer9@01
+    6 -> timer3@00 | timer13@00
+    7 -> timer1@00 | timer3@01 | timer14@00
+    8 -> timer1@00
+    9 -> timer1@01
+    10 -> timer1@02
+    11 -> timer1@03
+    15 -> timer2@00
+
+gpioPortB:
+    0 -> timer1@01 | timer3@02
+    1 -> timer1@02 | timer3@03
+    3 -> timer2@01
+    4 -> timer3@00
+    5 -> timer3@01
+    6 -> timer4@00
+    7 -> timer4@01
+    8 -> timer4@02 | timer10@00
+    9 -> timer4@03 | timer11@00
+    10 -> timer2@02
+    11 -> timer2@03
+    13 -> timer1@00
+    14 -> timer1@01
+    15 -> timer1@02
+
+gpioPortC:
+    6 -> timer3@00
+    7 -> timer3@01
+    8 -> timer3@02
+    9 -> timer3@03
+
+gpioPortD:
+    12 -> timer4@00
+    13 -> timer4@01
+    14 -> timer4@02
+    15 -> timer4@03
+
+gpioPortE:
+    5 -> timer9@00
+    6 -> timer9@01
+    8 -> timer1@00
+    9 -> timer1@00
+    10 -> timer1@01
+    11 -> timer1@01
+    12 -> timer1@02
+    13 -> timer1@02
+    14 -> timer1@03
+
+gpioPortF:
+    6 -> timer10@00
+    7 -> timer11@00
+    8 -> timer13@00
+    9 -> timer14@00
 
 sysbus:
     init:

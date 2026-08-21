@@ -128,12 +128,17 @@ rom2: Memory.MappedMemory @ sysbus 0x1FFFC400
     size: 0x3C00
 
 spi1: SPI.STM32SPI @ sysbus 0x40013000
+    series: STM32Series.F4
+    IRQ->nvic@35
 
 spi2: SPI.STM32SPI @ sysbus 0x40003800
-    IRQ->nvic@35
-    DMARecieve->dma1@3
+    series: STM32Series.F4
+    IRQ->nvic@36
+    DMAReceive->dma1@3
 
 spi3: SPI.STM32SPI @ sysbus 0x40003C00
+    series: STM32Series.F4
+    IRQ->nvic@51
 
 i2c1: I2C.STM32F1_I2C @ sysbus 0x40005400
     EventInterrupt -> nvic@31
@@ -153,7 +158,8 @@ dma1: DMA.STM32DMA @ sysbus 0x40026000
 dma2: DMA.STM32DMA @ sysbus 0x40026400
     [0-7] -> nvic@[56-60,68-70]
 
-rng: Miscellaneous.STM32F4_RNG @ sysbus 0x50060800
+rng: Miscellaneous.STM32_RNG @ sysbus 0x50060800
+    series: STM32Series.F4
     -> nvic@80
 
 iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
@@ -300,6 +306,82 @@ timer13:
 
 timer14:
     0 -> gpioPortA#07@09 | gpioPortF#09@09
+
+gpioPortA:
+    0 -> timer2@00 | timer5@00
+    1 -> timer2@01 | timer5@01
+    2 -> timer2@02 | timer5@02 | timer9@00
+    3 -> timer2@03 | timer5@03 | timer9@01
+    5 -> timer2@00 | timer8@00
+    6 -> timer3@00 | timer13@00
+    7 -> timer1@00 | timer3@01 | timer8@00 | timer14@00
+    8 -> timer1@00
+    9 -> timer1@01
+    10 -> timer1@02
+    11 -> timer1@03
+    15 -> timer2@00
+
+gpioPortB:
+    0 -> timer1@01 | timer3@02 | timer8@01
+    1 -> timer1@02 | timer3@03 | timer8@02
+    3 -> timer2@01
+    4 -> timer3@00
+    5 -> timer3@01
+    6 -> timer4@00
+    7 -> timer4@01
+    8 -> timer4@02 | timer10@00
+    9 -> timer4@03 | timer11@00
+    10 -> timer2@02
+    11 -> timer2@03
+    13 -> timer1@00
+    14 -> timer1@01 | timer8@01 | timer12@00
+    15 -> timer1@02 | timer8@02 | timer12@01
+
+gpioPortC:
+    6 -> timer3@00 | timer8@00
+    7 -> timer3@01 | timer8@01
+    8 -> timer3@02 | timer8@02
+    9 -> timer3@03 | timer8@03
+
+gpioPortD:
+    12 -> timer4@00
+    13 -> timer4@01
+    14 -> timer4@02
+    15 -> timer4@03
+
+gpioPortE:
+    5 -> timer9@00
+    6 -> timer9@01
+    8 -> timer1@00
+    9 -> timer1@00
+    10 -> timer1@01
+    11 -> timer1@01
+    12 -> timer1@02
+    13 -> timer1@02
+    14 -> timer1@03
+
+gpioPortF:
+    6 -> timer10@00
+    7 -> timer11@00
+    8 -> timer13@00
+    9 -> timer14@00
+
+gpioPortH:
+    6 -> timer12@00
+    9 -> timer12@01
+    10 -> timer5@00
+    11 -> timer5@01
+    12 -> timer5@02
+    13 -> timer8@00
+    14 -> timer8@01
+    15 -> timer8@02
+
+gpioPortI:
+    0 -> timer5@03
+    2 -> timer8@03
+    5 -> timer8@00
+    6 -> timer8@01
+    7 -> timer8@02
 
 bitbandPeripherals: Miscellaneous.BitBanding @ sysbus <0x42000000, +0x2000000>
     peripheralBase: 0x40000000

@@ -31,14 +31,14 @@ INSTALL_DIR=/opt/renode
 PYTHONVERSION=3.8
 
 OS_NAME=linux
-SED_COMMAND="sed -i"
 . common_copy_files_package.sh
+rm -f $DIR/bin/RenodeWPF.dll # Remove RenodeWPF which is not relevant on Linux
+rm -f $DIR/bin/RenodeWPF.runtimeconfig.json
 
 COMMON_SCRIPT=$DIR/tests/common.sh
 COMMAND_SCRIPT=linux/renode
 TEST_SCRIPT=linux/renode-test
-RUNNER=dotnet
-copy_bash_tests_scripts $TEST_SCRIPT $COMMON_SCRIPT $RUNNER
+copy_bash_tests_scripts $TEST_SCRIPT $COMMON_SCRIPT
 
 
 PACKAGES=output/packages
@@ -67,23 +67,6 @@ GENERAL_FLAGS=(\
     linux/icons/64x64/apps/renode.png=/usr/share/icons/hicolor/64x64/apps/renode.png
     linux/icons/scalable/apps/renode.svg=/usr/share/icons/hicolor/scalable/apps/renode.svg
     )
-
-cp $BASE/output/bin/$TARGET/libllvm-disas.so $BASE/output/bin/$TARGET/publish
-
-# Override the TARGET variable.
-# It is used to copy files into final package directory and all required files were moved there.
-TARGET="$TARGET/publish"
-
-# Remove RenodeTests because they are unused in the package
-rm -rf $DIR/tests/unit-tests/RenodeTests
-
-cp -r $BASE/output/bin/$TARGET/runtimes $DIR/bin
-cp $BASE/output/bin/$TARGET/Renode.runtimeconfig.json $DIR/bin
-cp $BASE/output/bin/$TARGET/Renode.deps.json $DIR/bin
-cp $BASE/output/bin/$TARGET/*.so $DIR/bin
-
-# Copy Lib directory which contains dependecies for IronPython
-cp -r $BASE/output/bin/$TARGET/Lib $DIR/bin
 
 COMMAND_SCRIPT=linux/renode
 cat linux/renode-dotnet-template | head -n 10 > $COMMAND_SCRIPT
@@ -141,7 +124,7 @@ PKG=renode-$VERSION.linux.tar.gz
 INSTALL_DIR='$(cd $(dirname $(readlink -f $0 2>/dev/null || echo $0)); echo $PWD)'
 rm ${COMMAND_SCRIPT}
 cp linux/renode-dotnet-template $COMMAND_SCRIPT
-copy_bash_tests_scripts $TEST_SCRIPT $COMMON_SCRIPT $RUNNER
+copy_bash_tests_scripts $TEST_SCRIPT $COMMON_SCRIPT
 mkdir -p $BASE/output/packages
 cp $COMMAND_SCRIPT $DIR
 cp $TEST_SCRIPT $DIR

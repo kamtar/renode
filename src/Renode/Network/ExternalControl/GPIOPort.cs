@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2010-2024 Antmicro
+// Copyright (c) 2010-2026 Antmicro
 //
 // This file is licensed under the MIT License.
 // Full license text is available in 'licenses/MIT.txt'.
@@ -9,11 +9,10 @@ using System.Collections.Generic;
 
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Peripherals;
-using Antmicro.Renode.Utilities;
 
 namespace Antmicro.Renode.Network.ExternalControl
 {
-    public class GPIOPort : BaseCommand, IHasEvents, IInstanceBasedCommand<IPeripheral>
+    public class GPIOPort : BaseCommand, IInstanceBasedCommand<IPeripheral>
     {
         public GPIOPort(ExternalControlServer parent)
             : base(parent)
@@ -21,20 +20,20 @@ namespace Antmicro.Renode.Network.ExternalControl
             Instances = new InstanceCollection<IPeripheral>();
         }
 
-        public override Response Invoke(List<byte> data) => this.InvokeHandledWithInstance(data, HasGPIO);
+        public override MessagePayload Invoke(List<byte> data) => this.InvokeHandledWithInstance(data, HasGPIO);
 
-        public Response Invoke(IPeripheral instance, List<byte> data)
+        public MessagePayload Invoke(IPeripheral instance, List<byte> data)
         {
             if(data.Count < 1)
             {
-                return Response.CommandFailed(Identifier, $"Expected at least {1 + InstanceBasedCommandHeaderSize} bytes of payload");
+                return MessagePayload.Error(Identifier, $"Expected at least {1 + InstanceBasedCommandHeaderSize} bytes of payload");
             }
             var command = (GPIOPortCommand)data[0];
 
             var expectedCount = GetExpectedPayloadCount(command);
             if(expectedCount != data.Count)
             {
-                return Response.CommandFailed(Identifier, $"Expected {expectedCount + InstanceBasedCommandHeaderSize} bytes of payload");
+                return MessagePayload.Error(Identifier, $"Expected {expectedCount + InstanceBasedCommandHeaderSize} bytes of payload");
             }
 
             switch(command)
@@ -46,11 +45,11 @@ namespace Antmicro.Renode.Network.ExternalControl
                 {
                     if(sender.Connections.TryGetValue(id, out var gpio))
                     {
-                        return Response.Success(Identifier, BitConverter.GetBytes(gpio.IsSet));
+                        return MessagePayload.Success(Identifier, BitConverter.GetBytes(gpio.IsSet));
                     }
-                    return Response.CommandFailed(Identifier, $"This instance does not provide GPIO output #{id}");
+                    return MessagePayload.Error(Identifier, $"This instance does not provide GPIO output #{id}");
                 }
-                return Response.CommandFailed(Identifier, "This instance does not provide GPIO outputs");
+                return MessagePayload.Error(Identifier, "This instance does not provide GPIO outputs");
 
             case GPIOPortCommand.SetState:
                 DecodeSetValueArguments(data, out id, out var value);
@@ -58,38 +57,34 @@ namespace Antmicro.Renode.Network.ExternalControl
                 if(instance is IGPIOReceiver receiver)
                 {
                     receiver.OnGPIO(id, value);
-                    return Response.Success(Identifier);
+                    return MessagePayload.Success(Identifier);
                 }
-                return Response.CommandFailed(Identifier, "This instance does not provide GPIO inputs");
+                return MessagePayload.Error(Identifier, "This instance does not provide GPIO inputs");
 
             case GPIOPortCommand.RegisterEvent:
                 DecodeRegisterEventArguments(data, out id, out var ed);
 
                 if(!(instance is INumberedGPIOOutput gpioDriver))
                 {
-                    return Response.CommandFailed(Identifier, "This instance does not provide GPIO outputs");
+                    return MessagePayload.Error(Identifier, "This instance does not provide GPIO outputs");
                 }
 
                 if(!gpioDriver.Connections.TryGetValue(id, out var pin) || !(pin is GPIO))
                 {
-                    return Response.CommandFailed(Identifier, $"This instance does not provide GPIO output #{id}");
+                    return MessagePayload.Error(Identifier, $"This instance does not provide GPIO output #{id}");
                 }
 
-                    (pin as GPIO).AddStateChangedHook((state) => SendEvent(state, ed));
-                return Response.Success(Identifier);
+                (pin as GPIO).AddStateChangedHook((state) => SendEvent(state, ed));
+                return MessagePayload.Success(Identifier);
 
             default:
-                return Response.CommandFailed(Identifier, "Unexpected command format");
+                return MessagePayload.Error(Identifier, "Unexpected command format");
             }
         }
 
         public override Command Identifier => Command.GPIOPort;
 
-        public override byte Version => 0x1;
-
         public InstanceCollection<IPeripheral> Instances { get; }
-
-        public event Action<Response> EventReported;
 
         private static bool HasGPIO(IPeripheral instance)
         {
@@ -98,11 +93,14 @@ namespace Antmicro.Renode.Network.ExternalControl
 
         private void SendEvent(bool gpioState, int eventDescriptor)
         {
-            var data = new EventData();
-            data.TimestampMicroseconds = (ulong)EmulationManager.Instance.CurrentEmulation.MasterTimeSource.ElapsedVirtualTime.TotalMicroseconds;
-            data.GpioState = gpioState;
+            var data = new EventData()
+            {
+                TimestampNanoseconds = EmulationManager.Instance.CurrentEmulation.MasterTimeSource.ElapsedVirtualTime.TotalNanoseconds,
+                GpioState = gpioState,
+            };
 
-            EventReported?.Invoke(Response.Event(Identifier, eventDescriptor, data.AsRawBytes()));
+            var response = parent.SendRequest(MessagePayload.Event(Identifier, eventDescriptor, data));
+            LogOnErrorResponse(response);
         }
 
         private int GetExpectedPayloadCount(GPIOPortCommand command)
@@ -141,7 +139,7 @@ namespace Antmicro.Renode.Network.ExternalControl
 
         private struct EventData
         {
-            public ulong TimestampMicroseconds;
+            public ulong TimestampNanoseconds;
             public bool GpioState;
         }
 

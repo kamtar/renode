@@ -106,7 +106,7 @@ namespace Antmicro.Renode.PlatformDescription
             return validValues.ToString();
         }
 
-        private void ProcessVariableDeclarations(Description description, string prefix, string path)
+        private void ProcessVariableDeclarations(Description description, string path)
         {
             // Collect all variable declarations (entries where there is a type specified).
             // These can be anywhere in the usings hierarchy, as long as there is only one.
@@ -128,7 +128,7 @@ namespace Antmicro.Renode.PlatformDescription
             }
         }
 
-        private void CollectVariableEntries(Description description, string prefix, string path)
+        private void CollectVariableEntries(Description description, string path)
         {
             // Having collected all variable declarations, go through the entries again and collect them in the correct
             // order for merging later.
@@ -190,6 +190,7 @@ namespace Antmicro.Renode.PlatformDescription
 
         private void ProcessInner(string file, string source)
         {
+            using var pausedState = machine.ObtainPausedState(true);
             try
             {
                 var usingsGraph = new UsingsGraph(this, file, source);
@@ -456,6 +457,12 @@ namespace Antmicro.Renode.PlatformDescription
                     {
                         maybeReferenceValue = ctorRegistrationInfo.Register;
                     }
+                    else if(creationNotRegistration)
+                    {
+                        // NOTE: At this point it can only be ReferenceValue as part of
+                        //       internal structure, such as ListValue.
+                        maybeReferenceValue = ctorElement as ReferenceValue;
+                    }
                     else
                     {
                         return;
@@ -485,8 +492,8 @@ namespace Antmicro.Renode.PlatformDescription
                     var isNotProperty = (objAsPropertyOrAttribute == null) || !objAsPropertyOrAttribute.IsPropertyAttribute;
 
                     var skipType = creationNotRegistration
-                        ? obj is RegistrationInfo
-                        : obj is IrqAttribute || obj is ConstructorOrPropertyAttribute;
+                        ? obj is RegistrationInfo || obj is IrqAttribute
+                        : obj is ConstructorOrPropertyAttribute;
                     var isNotOfSkippedType = !(isChildOfEntry && skipType);
 
                     return isNotProperty && isNotOfSkippedType;
@@ -1500,6 +1507,47 @@ namespace Antmicro.Renode.PlatformDescription
             return ConversionResult.Success;
         }
 
+        private ConversionResult TryConvertDictValue(Value value, Type expectedType, ref object result)
+        {
+            if(!(value is DictValue dictValue))
+            {
+                return ConversionResult.ConversionNotApplied;
+            }
+            var elementType = expectedType.GetEnumerableElementType();
+            if(elementType == null || elementType.GetGenericArguments().Length < 2)
+            {
+                return ConversionResult.ConversionNotApplied;
+            }
+            var keyType = elementType.GetGenericArguments()[0];
+            var valType = elementType.GetGenericArguments()[1];
+
+            var items = (IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(keyType, valType));
+            foreach(var item in dictValue.Items)
+            {
+                try
+                {
+                    var key = ConvertFromValue(keyType, item.Key);
+                    if(key != null)
+                    {
+                        /* If this function is called from FindConstructor, the references are not
+                         * resolved yet, leading to a null key.
+                         * TODO: This is a candidate for refactoring as when FindConstructor is
+                         * called, it is not necessary to convert the dictionary, only to check that
+                         * it is a dictionary with expected types.
+                         */
+                        items.Add(key, ConvertFromValue(valType, item.Value));
+                    }
+                }
+                catch(ArgumentException exception)
+                {
+                    throw new RecoverableException(exception);
+                }
+            }
+
+            result = items;
+            return ConversionResult.Success;
+        }
+
         private ConversionResult TryConvertSimpleValue(Type expectedType, Value value, out object result, bool silent = false)
         {
             result = null;
@@ -1520,6 +1568,7 @@ namespace Antmicro.Renode.PlatformDescription
                 TryConvertSimplestValue<BoolValue>(value, expectedType, typeof(bool), ref result),
                 TryConvertRangeValue(value, expectedType, ref result),
                 TryConvertListValue(value, expectedType, ref result),
+                TryConvertDictValue(value, expectedType, ref result),
             };
 
             var meaningfulResult = results.FirstOrDefault(x => x.ResultType != ConversionResultType.ConversionNotApplied);
@@ -1622,6 +1671,11 @@ namespace Antmicro.Renode.PlatformDescription
                 var subclasses = TypeManager.Instance.GetConcreteSubclasses(type);
                 var message = $"{type} is an abstract type. Try constructing one of the following concrete types: {String.Join(", ", subclasses)}";
                 HandleError(ParsingError.AbstractType, responsibleObject, message, false);
+                return null;
+            }
+            if(!type.IsRIDSupported())
+            {
+                HandleError(ParsingError.UnsupportedPlatform, responsibleObject, $"{type} is not supported on this platform", false);
                 return null;
             }
 

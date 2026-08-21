@@ -2,6 +2,7 @@
 
 set -e
 set -u
+set -o pipefail
 
 THIS_DIR="$(cd $(dirname $0); echo $PWD)"
 cd $THIS_DIR
@@ -9,43 +10,31 @@ cd $THIS_DIR
 . common_make_packages.sh
 
 RENODE_ROOT_DIR=$THIS_DIR/../..
-RENODE_OUTPUT_DIR=$RENODE_ROOT_DIR/output/bin/$TARGET/$RID
-RENODE_OUTPUT_BINARY=$RENODE_OUTPUT_DIR/publish/Renode
-DESTINATION=renode_${VERSION}-portable
+RENODE_PUBLISH=$RENODE_ROOT_DIR/output/publish/$TARGET/$RID
+HEADLESS_SUFFIX=""
+if $HEADLESS; then
+    HEADLESS_SUFFIX="-headless"
+fi
+DIR=renode_${VERSION}-portable${HEADLESS_SUFFIX}
 OS_NAME=linux
-SED_COMMAND="sed -i"
-DIR=$DESTINATION
-ARCHIVE_NAME="renode-$VERSION.linux-portable.tar.gz"
+ARCHIVE_NAME="renode-$VERSION.linux-portable${HEADLESS_SUFFIX}.tar.gz"
 if [[ $RID == "linux-arm64" ]]; then
-    ARCHIVE_NAME="renode-$VERSION.$RID-portable.tar.gz"
+    ARCHIVE_NAME="renode-$VERSION.$RID-portable${HEADLESS_SUFFIX}.tar.gz"
 fi
 
 . common_copy_files_portable.sh
 
-cp $RENODE_OUTPUT_BINARY $DESTINATION/renode
-cp \
-   $RENODE_OUTPUT_DIR/../libllvm-disas.so \
-   $RENODE_OUTPUT_DIR/libhostfxr.so \
-   $RENODE_OUTPUT_DIR/libcoreclr.so \
-   $RENODE_OUTPUT_DIR/libhostpolicy.so \
-   $RENODE_OUTPUT_DIR/libclrjit.so \
-   $RENODE_OUTPUT_DIR/libSystem.Native.so \
-   $RENODE_OUTPUT_DIR/libSystem.Security.Cryptography.Native.OpenSsl.so \
-   $RENODE_OUTPUT_DIR/libMono.Unix.so \
-   $RENODE_OUTPUT_DIR/libSystem.Globalization.Native.so \
-   $RENODE_OUTPUT_DIR/libSystem.IO.Compression.Native.so \
-   $RENODE_OUTPUT_DIR/libSystem.Net.Security.Native.so \
-   $RENODE_OUTPUT_DIR/libcoreclrtraceptprovider.so \
-   $RENODE_OUTPUT_DIR/libmscordaccore.so \
-   $RENODE_OUTPUT_DIR/libmscordbi.so \
-   $DESTINATION
+copy_publish_output $DIR
+mv $DIR/Renode $DIR/renode
 
 # Handle a very rare case where the binary doesn't have the execute permission after building.
-chmod +x $DESTINATION/renode
+chmod +x $DIR/renode
+
+sed_inplace '/run_tests.py/s/$/ --exclude "exclude_portable"/' "$DIR/renode-test"
 
 # Create tar
 mkdir -p ../../output/packages
-tar -czf ../../output/packages/$ARCHIVE_NAME $DESTINATION
+tar -cf - "$DIR" | gzip -9 > "../../output/packages/$ARCHIVE_NAME"
 
 echo "Created a dotnet portable package in output/packages/$ARCHIVE_NAME"
 
@@ -53,5 +42,5 @@ echo "Created a dotnet portable package in output/packages/$ARCHIVE_NAME"
 
 if $REMOVE_WORKDIR
 then
-    rm -rf $DESTINATION
+    rm -rf $DIR
 fi

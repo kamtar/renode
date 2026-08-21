@@ -4,14 +4,19 @@ set -e
 set -u
 
 #change dir to script location
-cd "${0%/*}"
+THIS_DIR="$(cd $(dirname $0); echo $PWD)"
+cd $THIS_DIR
 . common_make_packages.sh
 
-RENODE_OUTPUT_DIR=$BASE/output/bin/$TARGET/$RID
-RENODE_OUTPUT_BINARY=$RENODE_OUTPUT_DIR/publish/Renode
-DIR=renode_${VERSION}-portable
+RENODE_PUBLISH=$BASE/output/publish/$TARGET/$RID
+HEADLESS_SUFFIX=""
+if $HEADLESS
+then
+    HEADLESS_SUFFIX="-headless"
+fi
+DIR=renode_${VERSION}-portable${HEADLESS_SUFFIX}
+ZIP_NAME="renode-$VERSION.windows-portable${HEADLESS_SUFFIX}.zip"
 OS_NAME=windows
-SED_COMMAND="sed -i"
 
 . common_copy_files_portable.sh
 
@@ -20,43 +25,25 @@ rm $DIR/tests/common.sh
 rm $DIR/renode-test
 
 ### prepare renode-test
-cat >> $DIR/tests/test.bat << EOL
-@echo off
-set SCRIPTDIR=%~dp0
-py -3 "%SCRIPTDIR%\run_tests.py" --css-file "%SCRIPTDIR%\robot.css" --exclude "skip_windows" --robot-framework-remote-server-full-directory "%SCRIPTDIR%\.." -r %cd% %*
-EOL
+copy_windows_tests_scripts ".." renode.exe
 
-cat >> $DIR/renode-test.bat << EOL
-@echo off
-set test_script=%~dp0%\tests\test.bat
-call "%test_script%" %*
-EOL
-
-cp $RENODE_OUTPUT_BINARY $DIR/renode
-cp \
-    $RENODE_OUTPUT_DIR/../libllvm-disas.dll \
-    $RENODE_OUTPUT_DIR/hostfxr.dll \
-    $RENODE_OUTPUT_DIR/coreclr.dll \
-    $RENODE_OUTPUT_DIR/hostpolicy.dll \
-    $RENODE_OUTPUT_DIR/clrjit.dll \
-    $RENODE_OUTPUT_DIR/System.IO.Compression.Native.dll \
-    $RENODE_OUTPUT_DIR/mscordaccore.dll \
-    $RENODE_OUTPUT_DIR/mscordbi.dll \
-    $RENODE_OUTPUT_DIR/Renode.runtimeconfig.json \
-    $RENODE_OUTPUT_DIR/Renode.deps.json \
-    $DIR
+copy_publish_output $DIR
+mv $DIR/Renode.exe $DIR/renode.exe
 
 ### create zip
 mkdir -p ../../output/packages
 # Absolute path to use the Windows builtin BSD tar instead of minGW tar
-/c/Windows/SysWOW64/tar.exe -a -c -f ../../output/packages/renode-$VERSION.windows-portable.zip $DIR
+/c/Windows/SysWOW64/tar.exe -a -c -f "../../output/packages/$ZIP_NAME" $DIR
 
 # Build installer
-export BASE
-export VERSION
-windows_package_src=$DIR iscc "windows/renode.iss"
+if ! $HEADLESS
+then
+    export BASE
+    export VERSION
+    windows_package_src=$DIR iscc "windows/renode.iss"
+fi
 
-echo "Created a dotnet portable package in output/packages/renode-$VERSION.windows-portable.zip"
+echo "Created a dotnet portable package in output/packages/$ZIP_NAME"
 
 # Cleanup
 if $REMOVE_WORKDIR

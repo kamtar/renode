@@ -134,7 +134,7 @@ namespace Antmicro.Renode.WebSockets
                 return;
             }
 
-            Logger.Log(LogLevel.Info, $"Found new API Provider: {t.Name}");
+            Logger.Log(LogLevel.Debug, $"Found new API Provider: {t.Name}");
             IWebSocketAPIProvider apiProviderInstance = (IWebSocketAPIProvider)Activator.CreateInstance(t);
             apiProviders.Add(apiProviderInstance);
 
@@ -162,7 +162,7 @@ namespace Antmicro.Renode.WebSockets
                     continue;
                 }
 
-                Logger.Log(LogLevel.Info, $"- Registered action handler: {methodAttr.Method.Name} for: {methodAttr.Attribute.Name}");
+                Logger.Log(LogLevel.Debug, $"- Registered action handler: {methodAttr.Method.Name} for: {methodAttr.Attribute.Name}");
                 handlerList.Add(new ActionHandler
                 {
                     Action = methodAttr.Method,
@@ -183,7 +183,7 @@ namespace Antmicro.Renode.WebSockets
                 WebSocketAPIEventHandler eventHandler = (object data) => this.HandleEvents(eventAttr.Version.ToString(), eventAttr.Name, data);
 
                 delegateField.SetValue(apiProviderInstance, eventHandler);
-                Logger.Log(LogLevel.Info, $"- Registered event handler: {delegateField.Name} for: {eventAttr.Name}");
+                Logger.Log(LogLevel.Debug, $"- Registered event handler: {delegateField.Name} for: {eventAttr.Name}");
             }
         }
 
@@ -207,9 +207,10 @@ namespace Antmicro.Renode.WebSockets
             {
                 apiRequest = JsonConvert.DeserializeObject<APIRequest>(request);
             }
-            catch(Exception)
+            catch(Exception ex)
             {
                 SendErrorMessage(DefaultVersion, -1);
+                Logger.Log(LogLevel.Error, "Failed to parse request: {0}", ex);
                 return;
             }
 
@@ -236,8 +237,9 @@ namespace Antmicro.Renode.WebSockets
                         arg++;
                     }
                 }
-                catch(Exception)
+                catch(Exception ex)
                 {
+                    Logger.Log(LogLevel.Error, "Failed to prepare request arguments: {0}", ex);
                     SendErrorMessage(apiRequest.Version.ToString(), apiRequest.Id);
                     return;
                 }

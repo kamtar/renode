@@ -76,7 +76,7 @@ export class RenodeProxySession extends EventTarget {
         this.onData(ev.data);
       } else if (ev.data instanceof Blob) {
         this.onData(await ev.data.text());
-      } else if (ev.data instanceof ArrayBuffer) {
+      } else if (ev.data instanceof ArrayBuffer || Buffer.isBuffer(ev.data)) {
         this.onData(new TextDecoder().decode(ev.data));
       } else {
         throw new Error(`Unsupported data type: ${ev.data?.constructor?.name}`);
@@ -415,6 +415,20 @@ export class RenodeProxySession extends EventTarget {
     );
   }
 
+  public async resizeTerminal(
+    endpoint: string,
+    width: number,
+    height: number,
+  ): Promise<void> {
+    await this.sendSessionRequestTyped(
+      {
+        action: 'term-resize',
+        payload: { endpoint, width, height },
+      },
+      s.EmptyExecResponse,
+    );
+  }
+
   public registerEventCallback(event: string, callback: EventCallback) {
     if (!this.eventHandlers[event]) {
       this.eventHandlers[event] = [];
@@ -558,7 +572,7 @@ export class RenodeProxySession extends EventTarget {
 
   private async sendSessionRequestTyped<Res extends s.Response>(
     req: PartialRequest,
-    resParser: z.ZodType<Res, z.ZodTypeDef, object>,
+    resParser: z.ZodType<Res, object>,
     timeout?: number,
   ): Promise<ResData<Res>> {
     if (!this.socketReady) {
