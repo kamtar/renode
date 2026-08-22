@@ -546,6 +546,12 @@ fi
 if ! $HEADLESS
 then
     python3 ./tools/add-wpf-dep.py "$OUT_BIN_DIR/Renode.runtimeconfig.json" "$OUT_BIN_DIR/RenodeWPF.runtimeconfig.json"
+    if $ON_WINDOWS; then
+        # Renode.exe can be launched directly on Windows, so it must also use
+        # the WPF runtime configuration. The launcher uses RenodeWPF.dll, but
+        # users commonly invoke Renode.exe from the output directory.
+        cp_u "$OUT_BIN_DIR/RenodeWPF.runtimeconfig.json" "$OUT_BIN_DIR/Renode.runtimeconfig.json"
+    fi
     ln -fs Renode.dll "$OUT_BIN_DIR/RenodeWPF.dll"
 else
     rm -f "$OUT_BIN_DIR/RenodeWPF.runtimeconfig.json" "$OUT_BIN_DIR/RenodeWPF.dll"
