@@ -267,7 +267,13 @@ def handle_options(options):
         tests_collection = parse_tests_file(options.tests_file)
     else:
         tests_collection = []
-    options.tests = split_tests_into_groups(tests_collection, options.test_type)
+    test_groups = split_tests_into_groups(tests_collection, options.test_type)
+    if not test_groups:
+        print("No input suites")
+        sys.exit(1)
+
+    verify_suite_files_unique(test_groups)
+    options.tests = select_test_groups(test_groups, options)
 
     options.configuration = 'Debug' if options.debug_mode else 'Release'
 
@@ -294,8 +300,18 @@ def handle_options(options):
     os.putenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
 
 
-def register_handler(handler_type, extension, creator, before_parsing=None, after_parsing=None):
-    registered_handlers.append({'type': handler_type, 'extension': extension, 'creator': creator, 'before_parsing': before_parsing, 'after_parsing': after_parsing})
+def register_handler(handler_type, extensions, creator, before_parsing=None, after_parsing=None):
+    """
+    Register a test suite handler.
+
+    Parameters:
+        handler_type (str): Type of test
+        extensions (str|tuple): File extensions used to filter tests files.
+        creator: Class of the test suite object, instantiated with the test suite file path.
+        before_parsing: Function called before arguments parsing. None by default.
+        after_parsing: Function called after arguments parsing. None by default.
+    """
+    registered_handlers.append({'type': handler_type, 'extensions': extensions, 'creator': creator, 'before_parsing': before_parsing, 'after_parsing': after_parsing})
 
 
 def split_tests_into_groups(tests, test_type):
@@ -305,7 +321,7 @@ def split_tests_into_groups(tests, test_type):
             print("Path {} does not exist. Quitting ...".format(path))
             return False
         for handler in registered_handlers:
-            if (test_type == 'all' or handler['type'] == test_type) and path.endswith(handler['extension']):
+            if (test_type == 'all' or handler['type'] == test_type) and path.endswith(handler['extensions']):
                 # Ensure consistent path separators, even on Windows
                 path = Path(path).as_posix()
                 result.append(handler['creator'](path))
@@ -515,8 +531,8 @@ def print_rerun_trace(options):
 #
 # when running multiple test suites returns TRUE if ANY failed due to a crash.
 def failed_due_to_crash(options, groups_segment) -> bool:
-    for (group, _) in groups_segment:
-        for suite in options.tests[group]:
+    for (_, group_suites) in groups_segment:
+        for suite in group_suites:
             if suite.tests_failed_due_to_renode_crash():
                 return True
 
@@ -599,6 +615,16 @@ def init_worker_process(counter, active_suites):
     shared_active_suites = active_suites
 
 
+def select_test_groups(groups: dict[str, list[Any]], options: argparse.Namespace) -> dict[str, list[Any]]:
+    selected_groups: dict[str, list[Any]] = {}
+    for group, suites in groups.items():
+        selected: list[Any] = [suite for suite in suites if suite.select_tests(options)]
+        if selected:
+            selected_groups[group] = selected
+
+    return selected_groups
+
+
 def run():
     parser = prepare_parser()
     for handler in registered_handlers:
@@ -608,16 +634,11 @@ def run():
     options = parser.parse_args()
     handle_options(options)
 
-    if not options.tests:
-        sys.exit(1)
-
     for handler in registered_handlers:
         if 'after_parsing' in handler and handler['after_parsing'] is not None:
             handler['after_parsing'](options)
 
     configure_output(options)
-
-    verify_suite_files_unique(options.tests)
 
     print("Preparing suites")
 
@@ -634,12 +655,16 @@ def run():
         print("Exiting early due to --dry-run")
         exit(0)
 
+    if not groups_segment:
+        print("No tests selected for this segment.")
+        return
+
     args = []
     for (_, group_suites) in groups_segment:
         args.append((group_suites, total_number_of_suites, options))
 
-    for (group, _) in groups_segment:
-        for suite in options.tests[group]:
+    for (_, group_suites) in groups_segment:
+        for suite in group_suites:
             res = suite.prepare(options)
             if res is not None and res != 0:
                 print("Build failure, not running tests.")
@@ -718,8 +743,8 @@ def run():
     # before the log files are cleaned up
     test_failed_due_to_crash: bool = tests_failed and failed_due_to_crash(options, groups_segment)
 
-    for (group, _) in groups_segment:
-        for suite in options.tests[group]:
+    for (_, group_suites) in groups_segment:
+        for suite in group_suites:
             type(suite).log_files = logs_per_type[type(suite)]
             suite.cleanup(options)
 

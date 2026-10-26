@@ -6,26 +6,25 @@
 //
 
 using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace Antmicro.Renode.Network.ExternalControl
 {
     public class CheckVersion : BaseCommand
     {
-        public CheckVersion(ExternalControlServer server)
-            : base(server)
+        public CheckVersion(ExternalControlSocket parent)
+            : base(parent)
         {
         }
 
-        public override MessagePayload Invoke(List<byte> data)
+        public override MessagePayload Invoke(MessagePayload payload)
         {
-            if(data.Count != sizeof(uint))
+            var data = payload.Data;
+            if(data.Length != sizeof(uint))
             {
-                return MessagePayload.Error(Identifier, $"Expected at least {sizeof(uint)} bytes of data, but got {data.Count}");
+                return MessagePayload.Error(Identifier, $"Expected at least {sizeof(uint)} bytes of data, but got {data.Length}");
             }
 
-            var clientVersion = BitConverter.ToUInt32(CollectionsMarshal.AsSpan(data));
+            var clientVersion = BitConverter.ToUInt32(data);
 
             if(clientVersion == ProtocolVersion)
             {

@@ -139,6 +139,7 @@ Field Should Have Correct Value
     Should Be Equal As Integers     ${field_value}  ${expected_value}  ${error_message}
 
 Create Machine
+    Renode Test Setup
     Execute Command                 mach create
     Execute Command                 machine LoadPlatformDescriptionFromString ${PLAT}
     Execute Command                 using sysbus
@@ -164,7 +165,7 @@ IMP_.TCMREGIONR Should Have Correct Value
    "IMP_CTCMREGIONR"  0  0xFFFFF000  0x40000  TCM C region base address mismatch
 
 Should Remap TCM Regions
-    Execute Command                 cpu AssembleBlock ${CODE_BASE_ADDRESS} ${TCM_TEST_ASSEMBLY}
+    Execute Command                 cpu AssembleBlock ${CODE_BASE_ADDRESS} ${TCM_TEST_ASSEMBLY} triple="armv8r"
     Execute Command                 cpu PC ${CODE_BASE_ADDRESS}
     Execute Command                 emulation RunFor "0.01"
 
@@ -176,7 +177,7 @@ Should Disable TCM Region At EL0 and EL1
     Create Log Tester               0
 
     Execute Command                 cpu PC ${CODE_BASE_ADDRESS}
-    Execute Command                 cpu AssembleBlock `cpu PC` ${TCM_EL_ACCESS_TEST_ASSEMBLY}
+    Execute Command                 cpu AssembleBlock `cpu PC` ${TCM_EL_ACCESS_TEST_ASSEMBLY} triple="armv8r"
     Execute Command                 cpu SetRegister "R1" 0x2
 
     Execute Command                 allowPrivates true
@@ -202,7 +203,7 @@ Should Disable TCM Region At EL2
     Create Log Tester               0
 
     Execute Command                 cpu PC ${CODE_BASE_ADDRESS}
-    Execute Command                 cpu AssembleBlock `cpu PC` ${TCM_EL_ACCESS_TEST_ASSEMBLY}
+    Execute Command                 cpu AssembleBlock `cpu PC` ${TCM_EL_ACCESS_TEST_ASSEMBLY} triple="armv8r"
     Execute Command                 cpu SetRegister "R1" 0x1
 
     Execute Command                 allowPrivates true

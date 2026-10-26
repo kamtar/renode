@@ -91,6 +91,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
                 var connections = new ReadOnlyDictionary<int, IGPIO>(innerConnections);
                 bundledConnections.Add(id, connections);
                 cortexMBundleMap.Add(id, cortexMBundle);
+                AddInitiator(cortexMBundle.Cpu);
                 SetupCortexMBundle(cortexMBundle, connections);
             }
             this.cortexMBundles = new ReadOnlyDictionary<uint, CortexMBundle>(cortexMBundleMap);
@@ -163,6 +164,15 @@ namespace Antmicro.Renode.Peripherals.SystemC
                 this.NoisyLog("SystemC Non Secure Vector Table Offset: 0x{0:X}", vectorTableOffsetNonSecure);
                 break;
             }
+            case RenodeAction.SetClockFrequency:
+            {
+                var cortexMBundle = cortexMBundles[message.InitiatorId];
+                var clockFrequency = (uint)message.Address;
+                HandleSetClockFrequency(cortexMBundle, clockFrequency);
+                SendBackwardResponse(message);
+                this.NoisyLog("Clock frequency set to {0} for initiator {1}", clockFrequency, message.InitiatorId);
+                break;
+            }
             default:
                 this.ErrorLog("SystemC integration error - invalid message type {0} sent through backward connection from the SystemC process.", message.ActionId);
                 break;
@@ -231,6 +241,51 @@ namespace Antmicro.Renode.Peripherals.SystemC
             cortexMBundle.VtorNonSecureInitialized = true;
         }
 
+        private void HandleSetClockFrequency(CortexMBundle cortexMBundle, uint clockFrequency)
+        {
+            if(clockFrequency != 0)
+            {
+                SetClockFrequency(cortexMBundle, clockFrequency);
+                SetClockedState(cortexMBundle, true);
+            }
+            else
+            {
+                SetClockedState(cortexMBundle, false);
+            }
+        }
+
+        private void SetClockFrequency(CortexMBundle cortexMBundle, ulong value)
+        {
+            var nvic = cortexMBundle.Nvic;
+            var dwt = cortexMBundle.Dwt;
+            nvic.Frequency = value;
+            if(dwt != null)
+            {
+                dwt.Frequency = value;
+            }
+        }
+
+        private void SetClockedState(CortexMBundle cortexMBundle, bool value)
+        {
+            var nvic = cortexMBundle.Nvic;
+            var dwt = cortexMBundle.Dwt;
+            var cpu = cortexMBundle.Cpu;
+            nvic.Clocked = value;
+            if(dwt != null)
+            {
+                dwt.Clocked = value;
+            }
+
+            // We let a clock to settle down before clock signal is propagated to a CPU itself.
+            // This inertia is needed, because emulated CPU can't be stopped immediately.
+            // The worst case is assumed here, after the current quantum is finished,
+            // when it's guaranteed there are no memory transactions in progress.
+            machine.LocalTimeSource.ExecuteInNearestSyncedState(_ =>
+            {
+                cpu.Clocked = value;
+            }, true);
+        }
+
         private void SetupCortexMBundle(CortexMBundle cortexMBundle, IReadOnlyDictionary<int, IGPIO> connections)
         {
             var cpu = cortexMBundle.Cpu;
@@ -275,7 +330,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
             void holdInReset()
             {
                 cpu.IsHalted = true;
-                this.DebugLog("Cpu halted after reset signal assertion");
+                this.DebugLog("CPU halted after reset signal assertion");
             }
 
             void resetAndLeaveReset()
@@ -287,7 +342,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
                 // CPUWAIT is preserved by CortexM.Reset() and keeps the CPU halted
                 // until CPUWAIT is deasserted.
                 cpu.Resume();
-                this.DebugLog("Cpu and peripherals were reset after signal deassertion");
+                this.DebugLog("CPU and peripherals were reset after signal deassertion");
             }
 
             var resetState = resetOn == SignalActiveWhen.High ? true : false;
@@ -329,6 +384,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
 
             void updateResetState()
             {
+                SetDeferredHalt(cpu, false);
                 if(isAsserted)
                 {
                     holdInReset();
@@ -337,6 +393,11 @@ namespace Antmicro.Renode.Peripherals.SystemC
                 {
                     resetAndLeaveReset();
                 }
+            }
+
+            if(isAsserted)
+            {
+                SetDeferredHalt(cpu, true);
             }
 
             // GPIO signal (PowerOnReset/CoreResetIn) from SystemC

@@ -6,16 +6,23 @@
 //
 #pragma once
 
+#include <systemc>
+#include <atomic>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 
+#include <chrono>
 #include <mutex>
 #include <queue>
 #include <map>
 #include <tlm>
-#include <tlm_utils/simple_initiator_socket.h>
-#include <tlm_utils/simple_target_socket.h>
+
+#define _RENODE_BRIDGE_H
 
 struct CTCPClient;
 struct renode_message;
@@ -111,7 +118,7 @@ enum renode_action : uint8_t {
   // Socket: backward (memory mapped file), forward (native integration)
   // Request:
   //     data_length:
-  //       backward: ignored 
+  //       backward: ignored
   //       forward: 0-3 LSB: access type (read access = 0, write access = 1). 4-7 LSB: extension bits
   //     address: address in target's address space
   //     payload: ignored
@@ -176,7 +183,7 @@ enum renode_action : uint8_t {
   // Response:
   //     Identical to the request message.
   INIT_NON_SECURE_VTOR = 11,
-  
+
   // Socket: backward
   // Request:
   //     data_length: ignored
@@ -210,14 +217,24 @@ enum renode_action : uint8_t {
   WRITE_DEBUG = 14,
 
   // Socket: forward
-  // Teardown message signifies the process should exit. 
+  // Teardown message signifies the process should exit.
   // Request:
   //     data_length: ignored
   //     address: ignored
   //     connection_index: ignored
   // Response:
   //      Identical to the request message.
-  TEARDOWN,
+  TEARDOWN = 15,
+
+  // Socket: backward only
+  // Request:
+  //     data_length: ignored
+  //     connection_index: ignored
+  //     address: clock frequency
+  //     payload: ignored
+  // Response:
+  //     Identical to the request message.
+  SET_CLOCK_FREQUENCY = 16,
 };
 
 #pragma pack(push, 1)
@@ -296,15 +313,84 @@ public:
       if (wake) condvar_.notify_one();
     }
 
-    T take() {
+    // do_yield == true can only be used from an SC_THREAD
+    T take(bool do_yield = false, std::chrono::milliseconds timeout_duration = std::chrono::milliseconds(20)) {
       ulock u(mutex_);
-      while (queue_.empty())
-        condvar_.wait(u);
+      while (queue_.empty()) {
+        if(do_yield) {
+          if(condvar_.wait_for(u, timeout_duration) == std::cv_status::timeout) {
+            sc_core::wait(sc_core::SC_ZERO_TIME);
+          }
+        }
+        else {
+          condvar_.wait(u);
+        }
+      }
       // queue_ is non-empty and we have the lock
       T retval = queue_.front();
       queue_.pop();
       return retval;
     }
+};
+
+// Single producer/single consumer notification for the native mailbox.
+// Spin briefly to avoid an OS context switch on repeated transactions,
+// then block. Waiting state closes the check/sleep race with signal().
+class native_event {
+public:
+  void signal() {
+    if(state_.exchange(Ready) == Waiting) {
+      lock l(mutex_);
+      condvar_.notify_one();
+    }
+  }
+
+  // A timeout lets forward_loop yield a SystemC delta cycle while idle.
+  bool wait(uint32_t spin_iterations, std::chrono::milliseconds timeout_duration = std::chrono::milliseconds(20)) {
+    for(unsigned i = 0; i < spin_iterations; ++i) {
+      if(state_.load() == Ready) {
+        return true;
+      }
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+      _mm_pause();
+#elif defined(__i386__) || defined(__x86_64__)
+      __builtin_ia32_pause();
+#elif defined(__aarch64__)
+      asm volatile("yield");
+#endif
+    }
+
+    ulock u(mutex_);
+    auto expected = Empty;
+    if(!state_.compare_exchange_strong(expected, Waiting)) {
+      return true;
+    }
+    condvar_.wait_for(u, timeout_duration, [this] {
+      return state_.load() == Ready;
+    });
+    expected = Waiting;
+    return !state_.compare_exchange_strong(expected, Empty);
+  }
+
+  // Only the consumer resets a notification, after observing Ready. The
+  // rendezvous prevents the producer from publishing another time first
+  void reset() {
+    state_.store(Empty);
+  }
+
+private:
+  typedef std::lock_guard<std::mutex> lock;
+  typedef std::unique_lock<std::mutex> ulock;
+
+  enum State {
+    Empty,
+    Waiting,
+    Ready
+  };
+
+  std::atomic<State> state_{Empty};
+  std::mutex mutex_;
+  std::condition_variable condvar_;
 };
 
 class renode_connection;
@@ -325,7 +411,7 @@ public:
   void register_bridge(uint32_t id, renode_bridge *bridge);
   void handle_backward_response_from_native(renode_message message);
   void handle_backward_response_dmi_from_native(dmi_message message);
-  void handle_forward_request_from_native(renode_message message);
+  bool handle_forward_request_from_native(renode_message message, renode_message *response, dmi_native_message *dmi_response);
   renode_message receive_backward_response();
   dmi_message receive_backward_response_dmi();
   renode_message receive_forward_request(bool *closed);
@@ -344,12 +430,18 @@ private:
 
   int64_t max_desync_us;
   bool native;
+  uint32_t spin_wait_iterations;
   std::string mach;
   std::string peri;
 
+  native_event native_response_event;
+  native_event native_request_event;
+  renode_message native_request;
+  renode_message *native_response;
+  dmi_native_message *native_dmi_response;
+
   BlockingCollection<renode_message> bw_response;
   BlockingCollection<dmi_message> dmi_response;
-  BlockingCollection<renode_message> fw_request;
 
   std::map<uint32_t, renode_bridge*> bridges;
 };
@@ -383,7 +475,8 @@ public:
                                       sc_core::SC_ZERO_OR_MORE_BOUND>;
   using vtor_in_port = sc_core::sc_port<sc_core::sc_signal_in_if<uint32_t>, 1,
                                       sc_core::SC_ZERO_OR_MORE_BOUND>;
-
+  using clock_period_in_port = sc_core::sc_port<sc_core::sc_signal_in_if<sc_core::sc_time>, 1,
+                                      sc_core::SC_ZERO_OR_MORE_BOUND>;
 
   // Socket forwarding memory transactions performed in Renode to SystemC.
   renode_bus_initiator_socket initiator_socket;
@@ -420,6 +513,9 @@ public:
   // INITSVTOR signal.
   // Vector table offset address (secure or non-secure depending on state)
   vtor_in_port init_vtor_s_in;
+  
+  // Clock's period
+  clock_period_in_port clock_period_in;
 
   // Informs Renode CPU that memory has been modified in the given range. This
   // is necessary when using DMI (get_direct_mem_ptr) to modify memory
@@ -487,6 +583,7 @@ private:
   void on_init_ns_vtor();
   void on_init_s_vtor();
   void init_vtor(renode_action action, vtor_in_port &port);
+  void on_set_clock_period();
 
   void update_backward_gpio_state(uint64_t new_gpio_state);
   void service_backward_request(tlm::tlm_generic_payload &payload,

@@ -294,15 +294,22 @@ Should Handle One Thread Connected
 
     Check And Run Gdb               riscv64-zephyr-elf-gdb
 
+    ${threads}=                     Command GDB  info threads
+    Should Contain                  ${threads}  u54_1
+    Should Not Contain              ${threads}  Thread 2
+
     Command GDB                     b *0x000000008000029c
     Async Command GDB               c
     Sleep                           5s
     Send Signal To GDB              2
-    ${x}=                           Read Async Command Output
-    # u54_1 should never hit this address. Only e51 can get there
-    ${ptrn}=                        SetVariable  0x[a-f0-9]+
-    ${addr}=                        Should Match Regexp  ${x}  ${ptrn}
-    Should Be True                  0x000000008000029c < ${addr}
+    ${output}=                      Read Async Command Output
+    Should Contain                  ${output}  Program received signal SIGINT
+    # Only e51 can reach this breakpoint.
+    Should Not Contain              ${output}  Breakpoint 1
+    ${addr}=                        Should Match Regexp  ${output}  0x[a-f0-9]+
+    ${u54_pc}=                      Execute Command  sysbus.u54_1 PC
+    Should Be Equal As Integers     ${addr}  ${u54_pc}
+    Should Be True                  ${addr} != 0x80000000
 
 Should Handle Subset Of Threads Connected
     [Tags]                          exclude_windows
@@ -1110,8 +1117,9 @@ Should Read Per Core Memory
     [Setup]                         Create HiFive Unleashed
     Add Per Core Memory Regions
     Check And Run Gdb               riscv64-zephyr-elf-gdb
-    # flush GDB stderr
-    Read Async Command Error
+    # flush GDB stderr. Which contains the following 2 lines:
+    # warning: No executable has been specified and target does not support
+    # determining executable automatically.  Try using the "file" command.
     Read Async Command Error
     Read Async Command Error
 
@@ -1139,8 +1147,9 @@ Should Write Per Core Memory
     [Setup]                         Create HiFive Unleashed
     Add Per Core Memory Regions
     Check And Run Gdb               riscv64-zephyr-elf-gdb
-    # flush GDB stderr
-    Read Async Command Error
+    # flush GDB stderr. Which contains the following 2 lines:
+    # warning: No executable has been specified and target does not support
+    # determining executable automatically.  Try using the "file" command.
     Read Async Command Error
     Read Async Command Error
 
@@ -1251,24 +1260,11 @@ Clustering Should Load CPU And Then Another CPU
     Execute Command                 i @platforms/cpus/zynqmp.repl
 
     Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT} false cpu=sysbus.cluster0.apu2
-    Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT} false cpu=sysbus.cluster1.rpu0
+    Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT} false cpu=sysbus.cluster0.apu0
     Check and Run Gdb               aarch64-zephyr-elf-gdb
     ${x}=                           Command GDB  info threads
     Should Contain                  ${x}  Thread 1 "machine-0.apu2"
-    Should Contain                  ${x}  Thread 2 "machine-0.rpu0"
-
-Clustering Should Load All Cpus By Force
-    Execute Command                 i @platforms/cpus/zynqmp.repl
-
-    Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT} cpuCluster="all"
-    Check and Run Gdb               aarch64-zephyr-elf-gdb
-    ${x}=                           Command GDB  info threads
-    Should Contain                  ${x}  Thread 1 "machine-0.apu0"
-    Should Contain                  ${x}  Thread 2 "machine-0.apu1"
-    Should Contain                  ${x}  Thread 3 "machine-0.apu2"
-    Should Contain                  ${x}  Thread 4 "machine-0.apu3"
-    Should Contain                  ${x}  Thread 5 "machine-0.rpu0"
-    Should Contain                  ${x}  Thread 6 "machine-0.rpu1"
+    Should Contain                  ${x}  Thread 2 "machine-0.apu0"
 
 Clustering Should Load All Cpus If Only One Arch
     Execute Command                 i @platforms/cpus/cortex-r52_smp_4.repl

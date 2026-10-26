@@ -95,6 +95,7 @@ ${WORKSHOP_ASSEMBLY}                SEPARATOR=\n
 
 *** Keywords ***
 Create HiFive1 Demo
+    Renode Test Setup
     Execute Command                 mach create
     Execute Command                 machine LoadPlatformDescription @platforms/cpus/sifive-fe310.repl
     Execute Command                 cpu AssembleBlock ${ENTRYPOINT} "${ASSEMBLY}"
@@ -102,6 +103,7 @@ Create HiFive1 Demo
     Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT}
 
 Create HiFive1 Workshop Demo
+    Renode Test Setup
     Execute Command                 mach create
     Execute Command                 machine LoadPlatformDescription @platforms/cpus/sifive-fe310.repl
     Execute Command                 cpu AssembleBlock ${ENTRYPOINT} "${WORKSHOP_ASSEMBLY}"
@@ -194,7 +196,7 @@ Should Log Warning When No Snapshots Taken
     Command Gdb                     stepi
     ${expected_pc}=                 Execute Command  sysbus.cpu PC
     Command Gdb                     reverse-stepi
-    Wait For Log Entry              There are no snapshots taken before this timestamp.
+    Wait For Log Entry              There are no snapshots taken before this timestamp
     ${result_pc}=                   Execute Command  sysbus.cpu PC
     Should Be Equal As Numbers      ${expected_pc}  ${result_pc}
 

@@ -1,3 +1,6 @@
+*** Settings ***
+Resource                            arm-cortex-m-common.robot
+
 *** Variables ***
 ${CODE_ADDRESS}                     ${0x200}
 ${BUSFAULT_HANDLER_ADDRESS}         ${0x300}
@@ -9,9 +12,9 @@ ${NS_HARDFAULT_HANDLER_ADDRESS}     ${0x10040}
 ${NS_VECTOR_TABLE_ADDRESS}          ${0x10800}
 ${LOCKUP_PC}                        0xEFFFFFFE
 ${STACK_TOP}                        0x1000
-${STACKED_R1_ADDRESS}               0xFE4
-${STACKED_R2_ADDRESS}               0xFE8
-${STACKED_PC_ADDRESS}               0xFF8
+${STACKED_R1_OFFSET}                0x4
+${STACKED_R2_OFFSET}                0x8
+${STACKED_PC_OFFSET}                0x18
 ${NESTED_STACKED_PC_ADDRESS}        0xFD8
 ${FAULTING_PERIPHERAL_ADDRESS}      0x100000
 ${FAULTING_HARDFAULT_VECTOR}        0x10000C
@@ -20,50 +23,7 @@ ${R1_BEFORE_FAULT}                  0x11
 ${R1_AFTER_FAULT}                   0x22
 ${R2_BEFORE_FAULT}                  0xA5A5A5A5
 
-${SCB_SHCSR}                        0xE000ED24
-${SCB_ICSR}                         0xE000ED04
-${SCB_AIRCR}                        0xE000ED0C
-${SCB_CFSR}                         0xE000ED28
-${SCB_CFSR_NS}                      0xE002ED28
-${SCB_HFSR}                         0xE000ED2C
-${SCB_BFAR}                         0xE000ED38
-${SCB_BFAR_NS}                      0xE002ED38
-${SCB_CCR}                          0xE000ED14
-${SCB_SFSR}                         0xE000EDE4
-${SCB_DHCSR}                        0xE000EDF0
-${SCB_DHCSR_NS}                     0xE002EDF0
-${SCB_CPACR}                        0xE000ED88
-${SCB_FPCCR}                        0xE000EF34
-${SCB_FPCAR}                        0xE000EF38
-${NVIC_ISPR0}                       0xE000E200
-${NVIC_IABR0}                       0xE000E300
-${NVIC_ITNS0}                       0xE000E380
-${SHCSR_BUSFAULTENA}                ${{1<<17}}
-${SHCSR_BUSFAULTACT}                ${{1<<1}}
-${SHCSR_BUSFAULTPENDED}             ${{1<<14}}
-${AIRCR_VECTKEY_BFHFNMINS}          0x05FA2000
-${CFSR_PRECISERR_BFARVALID}         ${{(1<<9) | (1<<15)}}
-${CFSR_UNSTKERR}                    ${{1<<11}}
-${CFSR_STKERR}                      ${{1<<12}}
-${CFSR_LSPERR}                      ${{1<<13}}
-${CFSR_INVSTATE}                    ${{1<<17}}
-${CFSR_INVPC}                       ${{1<<18}}
-${HFSR_VECTTBL}                     ${{1<<1}}
-${HFSR_FORCED}                      ${{1<<30}}
-${CCR_BFHFNMIGN}                    ${{1<<8}}
-${SHCSR_HARDFAULTACT}               ${{1<<2}}
-${SHCSR_NMIACT}                     ${{1<<5}}
-${SHCSR_HARDFAULTACT_NMIACT}        ${{(1<<2) | (1<<5)}}
-${SHCSR_HARDFAULTPENDED}            ${{1<<21}}
 ${EXC_RETURN_THREAD_MSP}            0xFFFFFFB8
-${SFSR_INVIS}                       ${{1<<1}}
-${SFSR_INVER}                       ${{1<<2}}
-${DHCSR_S_LOCKUP}                   ${{1<<19}}
-${FPCCR_LSPACT}                     ${{1<<0}}
-${FPCCR_HFRDY}                      ${{1<<4}}
-${FPCCR_TS}                         ${{1<<26}}
-${CPACR_CP10_CP11_FULL_ACCESS}      0x00F00000
-${CONTROL_FPCA}                     ${{1<<2}}
 
 ${PLATFORM}                         SEPARATOR=\n
 ...                                 """
@@ -74,7 +34,7 @@ ${PLATFORM}                         SEPARATOR=\n
 ...                                 ${SPACE*4}-> cpu@0
 ...
 ...                                 cpu: CPU.CortexM @ sysbus
-...                                 ${SPACE*4}cpuType: "cortex-m33"
+...                                 ${SPACE*4}cpuType: "cortex-m55"
 ...                                 ${SPACE*4}nvic: nvic
 ...
 ...                                 faultingPeripheral: Mocks.BusFaultingPeripheral @ sysbus ${FAULTING_PERIPHERAL_ADDRESS}
@@ -95,7 +55,7 @@ ${TRUSTZONE_PLATFORM}               SEPARATOR=\n
 ...                                 ${SPACE*4}-> cpu@0
 ...
 ...                                 cpu: CPU.CortexM @ sysbus
-...                                 ${SPACE*4}cpuType: "cortex-m33"
+...                                 ${SPACE*4}cpuType: "cortex-m55"
 ...                                 ${SPACE*4}nvic: nvic
 ...                                 ${SPACE*4}enableTrustZone: true
 ...
@@ -248,6 +208,13 @@ Prepare Faulting Instruction
 Enable BusFault
     Execute Command                 sysbus WriteDoubleWord ${SCB_SHCSR} ${SHCSR_BUSFAULTENA} context=cpu
 
+Enable FPU
+    Execute Command                 sysbus WriteDoubleWord ${SCB_CPACR} ${CPACR_CP10_CP11_FULL_ACCESS} context=cpu
+
+Disable Lazy Floating Point Preservation
+    ${fpccr}=                       Execute Command  sysbus ReadDoubleWord ${SCB_FPCCR} context=cpu
+    Execute Command                 sysbus WriteDoubleWord ${SCB_FPCCR} ${{int($fpccr.strip(), 16) & (0xFFFFFFFF-$FPCCR_LSPEN)}} context=cpu
+
 Execute Faulting Instruction
     Execute Command                 cpu Step 1
 
@@ -281,26 +248,33 @@ IPSR Should Be Equal
     Should Be Equal As Integers     ${ipsr}  ${expected}
 
 ${width} ${io} Should Be Equal
-    [Arguments]  ${expected}
+    [Arguments]                     ${expected}
+    ...                             ${message}=${None}
+
     ${val}=                         Execute Command  sysbus Read${width} ${io} context=cpu
-    Should Be Equal As Integers     ${val}  ${expected}
+    Should Be Equal As Integers     ${val}  ${expected}  msg=${message}
 
 Fault Should Be Precise
-    [Arguments]                     ${handler_address}  ${fault_address}  ${expected_hfsr}=0
+    [Arguments]                     ${handler_address}
+    ...                             ${fault_address}
+    ...                             ${expected_hfsr}=0
+    ...                             ${target_sp}=${0xFE0}
     PC Should Be Equal              ${handler_address}
 
     # Neither the faulting load nor the instruction following the failed
     # access may modify architectural state before the exception is taken.
-    Register Should Be Equal        1  ${R1_BEFORE_FAULT}
-    Register Should Be Equal        2  ${R2_BEFORE_FAULT}
+    Register Should Be Equal        1  ${R1_BEFORE_FAULT}  message=R1 changed
+    Register Should Be Equal        2  ${R2_BEFORE_FAULT}  message=R2 changed
 
-    DoubleWord ${STACKED_R1_ADDRESS} Should Be Equal  ${R1_BEFORE_FAULT}
-    DoubleWord ${STACKED_R2_ADDRESS} Should Be Equal  ${R2_BEFORE_FAULT}
-    DoubleWord ${STACKED_PC_ADDRESS} Should Be Equal  ${CODE_ADDRESS}
+    Register Should Be Equal        SP  ${target_sp}  message=SP changed
 
-    DoubleWord ${SCB_CFSR} Should Be Equal  ${CFSR_PRECISERR_BFARVALID}
-    DoubleWord ${SCB_BFAR} Should Be Equal  ${fault_address}
-    DoubleWord ${SCB_HFSR} Should Be Equal  ${expected_hfsr}
+    DoubleWord ${{ ${target_sp} + ${STACKED_R1_OFFSET} }} Should Be Equal  ${R1_BEFORE_FAULT}  R1 changed during stacking from the BusFault
+    DoubleWord ${{ ${target_sp} + ${STACKED_R2_OFFSET} }} Should Be Equal  ${R2_BEFORE_FAULT}  R2 changed during stacking from the BusFault
+    DoubleWord ${{ ${target_sp} + ${STACKED_PC_OFFSET} }} Should Be Equal  ${CODE_ADDRESS}  PC changed during stacking from the BusFault
+
+    DoubleWord ${SCB_CFSR} Should Be Equal  ${CFSR_PRECISERR_BFARVALID}  SCB_CFSR
+    DoubleWord ${SCB_BFAR} Should Be Equal  ${fault_address}  SCB_BFAR
+    DoubleWord ${SCB_HFSR} Should Be Equal  ${expected_hfsr}  SCB_HFSR
 
 Run Precise BusFault Test Without Single Step
     [Arguments]                     ${assembly}
@@ -319,10 +293,27 @@ Run Precise BusFault Test Without Single Step
     DoubleWord ${SCB_CFSR} Should Be Equal  ${CFSR_PRECISERR_BFARVALID}
     DoubleWord ${SCB_BFAR} Should Be Equal  ${FAULTING_PERIPHERAL_ADDRESS}
 
+Test Precise BusFault on FPU Instruction
+    [Arguments]                     ${instruction}
+    ...                             ${fault_address}
+
+    Reset Emulation
+    Create Machine
+    Enable BusFault
+    Enable FPU
+    Execute Command                 faultingPeripheral FaultOffset ${{ ${fault_address} - ${FAULTING_PERIPHERAL_ADDRESS} }}
+
+    Prepare Faulting Instruction    "${instruction}; b ."  ${fault_address}
+    Execute Faulting Instruction
+    Fault Should Be Precise         ${BUSFAULT_HANDLER_ADDRESS}  ${fault_address}  target_sp=0xF98
+
 *** Test Cases ***
 Should Enter Lockup On Invalid Reset State
     Create Bare Machine
-    Execute Command                 cpu Step 1
+    # The first step stops on the boundary of the instruction fetch that raised the INVSTATE
+    # fault, before the first instruction of the handler (the PC read from the zeroed vector
+    # table) is attempted. The lockup is entered when that fetch faults, in the second step.
+    Execute Command                 cpu Step 2
 
     Lockup Should Be Asserted
     DoubleWord ${SCB_CFSR} Should Be Equal  ${CFSR_INVSTATE}
@@ -449,26 +440,6 @@ Should Pend HardFault On NMI Stacking BusFault From Thread Mode
     Should Be Equal                 ${locked_up}  False  strip_spaces=True
     DoubleWord ${SCB_CFSR} Should Be Equal  ${CFSR_STKERR}
     DoubleWord ${SCB_HFSR} Should Be Equal  ${HFSR_FORCED}
-
-Should Repend BusFault On Its Own Stacking Fault
-    Create Machine
-    Enable BusFault
-    Prepare Faulting Instruction    ${READ_ASSEMBLY}  ${FAULTING_PERIPHERAL_ADDRESS}
-    Execute Command                 cpu SP 0x100020
-    Execute Faulting Instruction
-
-    # The enabled instruction-time BusFault starts exception entry, whose
-    # first stack write also faults. DerivedLateArrival() cannot replace the
-    # original exception with an equal-priority instance, so it starts the
-    # original handler and leaves the derived BusFault pending.
-    PC Should Be Equal              ${BUSFAULT_HANDLER_ADDRESS}
-    Register Should Be Equal        SP  0x100000
-    IPSR Should Be Equal            5
-    DoubleWord ${SCB_CFSR} Should Be Equal  ${{${CFSR_PRECISERR_BFARVALID} | ${CFSR_STKERR}}}
-    DoubleWord ${SCB_HFSR} Should Be Equal  0
-    ${shcsr}=                       Execute Command  sysbus ReadDoubleWord ${SCB_SHCSR} context=cpu
-    Should Be True                  ${{(int($shcsr.strip(), 16) & $SHCSR_BUSFAULTACT) != 0}}
-    Should Be True                  ${{(int($shcsr.strip(), 16) & $SHCSR_BUSFAULTPENDED) != 0}}
 
 Should Replace External IRQ With HardFault On Stacking BusFault
     Create Machine
@@ -761,7 +732,7 @@ Should Enter Lockup On HardFault Vector BusFault
 
 Should Pend Lazy FP HardFault When Original Context Was Ready
     Create Machine
-    Execute Command                 sysbus WriteDoubleWord ${SCB_CPACR} ${CPACR_CP10_CP11_FULL_ACCESS} context=cpu
+    Enable FPU
     Execute Command                 faultingPeripheral FaultOffset 0x20
     Execute Command                 cpu AssembleBlock ${CODE_ADDRESS} "vmov.f32 s0, s0; b ."
     Execute Command                 cpu AssembleBlock ${NMI_HANDLER_ADDRESS} "nop; vmov.f32 s0, s0; b ."
@@ -795,7 +766,7 @@ Should Pend Lazy FP HardFault When Original Context Was Ready
 
 Should Enter Lockup On Lazy FP Preservation BusFault
     Create Machine
-    Execute Command                 sysbus WriteDoubleWord ${SCB_CPACR} ${CPACR_CP10_CP11_FULL_ACCESS} context=cpu
+    Enable FPU
     Execute Command                 cpu AssembleBlock ${HARDFAULT_HANDLER_ADDRESS} "vmov.f32 s0, s0; b ."
     Prepare Faulting Instruction    ${READ_ASSEMBLY}  ${FAULTING_PERIPHERAL_ADDRESS}
 
@@ -835,7 +806,7 @@ Should Enter Lockup On Lazy FP Preservation BusFault
 
 Should Reserve Complete Secure Lazy FP Frame With TS
     Create TrustZone Machine
-    Execute Command                 sysbus WriteDoubleWord ${SCB_CPACR} ${CPACR_CP10_CP11_FULL_ACCESS} context=cpu
+    Enable FPU
     ${fpccr}=                       Execute Command  sysbus ReadDoubleWord ${SCB_FPCCR} context=cpu
     Execute Command                 sysbus WriteDoubleWord ${SCB_FPCCR} ${{int($fpccr.strip(), 16) | $FPCCR_TS}} context=cpu
     Execute Command                 cpu AssembleBlock ${CODE_ADDRESS} "vmov.f32 s0, s0; b ."
@@ -910,7 +881,7 @@ Should Tail Chain On Exception Unstacking BusFault
 Should Clear FPCA When Tail Chaining On Unstacking BusFault
     Create Machine
     Enable BusFault
-    Execute Command                 sysbus WriteDoubleWord ${SCB_CPACR} ${CPACR_CP10_CP11_FULL_ACCESS} context=cpu
+    Enable FPU
     Execute Command                 faultingPeripheral FaultOnWrites false
     Execute Command                 cpu AssembleBlock ${CODE_ADDRESS} "b ."
     Execute Command                 cpu AssembleBlock ${NMI_HANDLER_ADDRESS} "vmov.f32 s0, s0; bx lr"
@@ -1298,3 +1269,109 @@ Read Access Should Produce Precise Bus Fault Without Single Step
 
 Write Access Should Produce Precise Bus Fault Without Single Step
     Run Precise BusFault Test Without Single Step  ${E2E_WRITE_ASSEMBLY}
+
+Should Raise Precise BusFault on VLSTM Instruction
+    Create TrustZone Machine
+    Enable BusFault
+    Enable FPU
+    Disable Lazy Floating Point Preservation
+    Execute Command                 cpu DoLazyFloatingPointStatePreservation
+    Prepare Faulting Instruction    "VLSTM r0; b ."  ${FAULTING_PERIPHERAL_ADDRESS}
+    Execute Faulting Instruction
+    Fault Should Be Precise         ${BUSFAULT_HANDLER_ADDRESS}  ${FAULTING_PERIPHERAL_ADDRESS}  target_sp=0xF98
+
+Should Raise Precise BusFault on VLLDM Instruction
+    Create TrustZone Machine
+    Enable BusFault
+    Enable FPU
+    Disable Lazy Floating Point Preservation
+    Execute Command                 cpu DoLazyFloatingPointStatePreservation
+    Prepare Faulting Instruction    "VLLDM r0; b ."  ${FAULTING_PERIPHERAL_ADDRESS}
+    Execute Faulting Instruction
+    Fault Should Be Precise         ${BUSFAULT_HANDLER_ADDRESS}  ${FAULTING_PERIPHERAL_ADDRESS}  target_sp=0xF98
+
+Should Raise BusFault on BLXNS Instruction
+    ${sp}=                          Evaluate  ${FAULTING_PERIPHERAL_ADDRESS} + 8
+
+    Create TrustZone Machine
+    Enable BusFault
+    Prepare Faulting Instruction    "BLXNS r0; b ."  ${FAULTING_PERIPHERAL_ADDRESS}
+    Execute Command                 cpu SP ${sp}
+    Execute Command                 cpu AssembleBlock ${BUSFAULT_HANDLER_ADDRESS} "bx lr"
+    Execute Faulting Instruction
+
+    PC Should Be Equal              ${BUSFAULT_HANDLER_ADDRESS}
+    # SP shouldn't be incremented on fault, so interrupt stack frame should start at ${sp}-0x20
+    Register Should Be Equal        SP  0xfffe8
+    # Bus Fault occured during stacking, BFAR is not updated
+    DoubleWord ${SCB_CFSR} Should Be Equal  ${{ $CFSR_STKERR }}  SCB_CFSR
+
+Should Raise BusFault on VLD/VST Instructions
+    # Note: non 32-bit aligned access is currently unsupported for these instructions
+    ${address}=                     Set Variable  ${FAULTING_PERIPHERAL_ADDRESS}
+    FOR  ${instruction_template}  IN
+    ...  VST40.{0} {{Q0, Q1, Q2, Q3}}, [r0]
+    ...  VLD40.{0} {{Q0, Q1, Q2, Q3}}, [r0]
+    ...  VST20.{0} {{Q0, Q1}}, [r0]
+    ...  VLD20.{0} {{Q0, Q1}}, [r0]
+        FOR  ${element}  IN  0  1  2
+            ${size}=                        Evaluate  (8 << ${element})
+            ${instruction}=                 Evaluate  "${instruction_template}".format(${size})
+
+            Execute Command                 log "Testing ${instruction} with R0=${address}"
+            TRY
+                Test Precise BusFault on FPU Instruction  ${instruction}  ${address}
+            EXCEPT  AS  ${message}
+                Fail                            ${instruction}: ${message}
+            END
+        END
+    END
+
+Should Raise BusFault on VSTR/VLDR Vector Instructions
+    # The following instructions can access memory on different alignment
+    # The following test is supposed to test if the SecureFault is risen properly even when memory fetches aren't 32-bit aligned
+    ${base_address}=                Set Variable  ${FAULTING_PERIPHERAL_ADDRESS}
+    FOR  ${instruction_template}  IN
+    ...  VSTR{0}.u32 Q0, [r0]
+    ...  VLDR{0}.u32 Q0, [r0]
+    ...  VSTR{0}.u32 Q0, [r0, Q5]  # Q5 should be equal 0 so access will happen exactly at address contained in r0
+    ...  VLDR{0}.u32 Q0, [r0, Q5]
+        FOR  ${element}  IN  0  1  2
+            ${alignment}=                   Set Variable  0
+            WHILE  ${alignment} < 32
+                ${size}=                        Evaluate  (8 << ${element})
+                ${letter}=                      Evaluate  ["B", "H", "W"][${element}]
+
+                ${instruction}=                 Evaluate  "${instruction_template}".format("${letter}")
+                ${address}=                     Evaluate  ${base_address} + ${alignment} // 8
+
+                Execute Command                 log "Testing ${instruction} with R0=${address}"
+                TRY
+                    Test Precise BusFault on FPU Instruction  ${instruction}  ${address}
+                EXCEPT  AS  ${message}
+                    Fail                            ${instruction} with alignment=${alignment}: ${message}
+                END
+
+                ${alignment}=                   Evaluate  ${alignment} + ${size}
+            END
+        END
+    END
+
+Should Raise BusFault on VSTR/VLDR Instructions
+    ${base_address}=                Set Variable  ${FAULTING_PERIPHERAL_ADDRESS}
+    FOR  ${instruction}  ${address}  IN
+    ...  VSTRD.s64 Q0, [r0, Q5]  ${base_address}
+    ...  VLDRD.s64 Q0, [r0, Q5]  ${base_address}
+    ...  VSTR s0, [r0]  ${base_address}
+    ...  VSTR d0, [r0]  ${base_address}
+    ...  VLDR s0, [r0]  ${base_address}
+    ...  VLDR d0, [r0]  ${base_address}
+    ...  VSTR FPSCR, [r0]  ${base_address}
+    ...  VLDR FPSCR, [r0]  ${base_address}
+        Execute Command                 log "Testing ${instruction} with R0=${address}"
+        TRY
+            Test Precise BusFault on FPU Instruction  ${instruction}  ${address}
+        EXCEPT  AS  ${message}
+            Fail                            ${instruction} with address=${{ hex(${address}) }}: ${message}
+        END
+    END

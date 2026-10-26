@@ -55,10 +55,8 @@ Check Input Capture Line
 *** Test Cases ***
 Timer Should Support Input Capture
     Create Machine                  ${TIM_PWMInput}
-    Create Terminal Tester          ${UART}
+    Create Terminal Tester          ${UART}  defaultPauseEmulation=true
     Execute Command                 machine LoadPlatformDescriptionFromString "gpioPortB: { 6 -> gpioPortA@1 }"
-
-    Start Emulation
 
     Check Input Capture Line        frequency=0     duty=0   IC2=0
     Execute Command                 sysbus.gpioPortC.UserButton1 PressAndRelease
@@ -70,8 +68,6 @@ Should Have Working UART
     Create Machine                  ${UART_PRINTF}
     Create Terminal Tester          ${UART}
 
-    Start Emulation
-
     Wait For Line On Uart           UART Printf Example
     Wait For Line On Uart           ** Test finished successfully. **
 
@@ -79,9 +75,9 @@ Should have Working EXTI
     Create Machine                 ${EXTI_TogglelED}
     Create LED Tester              ${BLUE_LED}  defaultTimeout=0.1
 
-    Start Emulation
-
-    Assert LED State               false
+    # The firmware preloads PB4 high before enabling output, leaving the active-low LED off.
+    # Let initialization finish before pressing the button and testing the EXTI handler.
+    Assert And Hold LED State      false  timeoutAssert=0.1  timeoutHold=0.01
 
     Execute Command                ${USER_BUTTON} PressAndRelease
     Assert LED State               true

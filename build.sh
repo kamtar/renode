@@ -120,9 +120,6 @@ do
         "skip-fetch")
           SKIP_FETCH=true
           ;;
-        "net")
-          echo "'--net' flag is a no-op and will be removed in the future" >&1
-          ;;
         "source-package")
           SOURCE_PACKAGE=true
           ;;
@@ -604,6 +601,10 @@ done
 
 # Build and copy UI
 if $UI; then
+  export WS_API_PATH="$ROOT_PATH/ws-api/ts"
+  pnpm -C "$WS_API_PATH" ci
+  pnpm -C "$WS_API_PATH" compile
+
   NO_COLOR=true "$UI_PATH/scripts/build_neutralino.sh"
   for idx in "${!SUPPORTED_RIDS[@]}"; do
     PLAT_RID=${SUPPORTED_RIDS[idx]}
@@ -617,6 +618,7 @@ if $UI; then
     fi
 
     mkdir -p "$OUT_BIN_DIR/platform-lib/$PLAT_RID"
+    cp_u "$UI_PATH/frontend/build/index.html" "$PWD"
     cp_u "$UI_PATH/neutralino/dist/renode-ui/renode-ui-$PLAT_UI_RID$BIN_EXT" "$OUT_BIN_DIR/platform-lib/$PLAT_RID/renode-ui$BIN_EXT"
   done
 fi
@@ -625,9 +627,27 @@ if $SHARED
 then
     echo "Building DNNE package..."
     dotnet build "$(get_path "$ROOT_PATH/tools/NativeInterface/third-party/DNNE/src/create_package.proj")" -c "$CONFIGURATION"
+
+    if [ $RID = linux-x64 ]; then
+      # Build a stub `libdl.so` library with `ld*` functions used in librenode using a versions map compatible with GLIBC versions older than 2.34.
+      # Otherwise, `librenode.so` built with newer GLIBC can't be used with older GLIBC because `dl*` functions are expected to be in `libc.so.6`.
+      # The trick with wrappers and explicit function versions used in tlib isn't applicable here because the functions can't be found even after
+      # forcing the linker to treat `libdl.so` as required.
+      LIBDL_STUB_SRC="$ROOT_PATH/tools/NativeInterface/csharp/libdl-linux-x64-stub"
+      LIBDL_STUB_PATH="$OUT_BIN_DIR/libdl.so.2"
+      gcc -shared -fPIC -Wl,--version-script="$LIBDL_STUB_SRC/libdl.map" -Wl,-soname,libdl.so.2 -o "$LIBDL_STUB_PATH" "$LIBDL_STUB_SRC/stub.c"
+
+      EXTRA_ARGUMENTS="-p:LibdlStubPath=$LIBDL_STUB_PATH"
+    fi
+
     echo "Building librenode..."
-    dotnet build "$(get_path "$ROOT_PATH/tools/NativeInterface/csharp/NativeInterface.csproj")" -c "$CONFIGURATION" -f "$TFM" -p:PlatformOutputDir="$OUT_BIN_DIR/platform-lib/$RID"
+    dotnet build "$(get_path "$ROOT_PATH/tools/NativeInterface/csharp/NativeInterface.csproj")" -c "$CONFIGURATION" -f "$TFM" -p:PlatformOutputDir="$OUT_BIN_DIR/platform-lib/$RID" ${EXTRA_ARGUMENTS:-}
     copy_native_interface_runtime_config "$OUT_BIN_DIR" "$OUT_BIN_DIR/platform-lib/$RID"
+
+    if [ $RID = linux-x64 ]; then
+      # See above why this stub was needed, it shouldn't be used at runtime.
+      rm $LIBDL_STUB_PATH
+    fi
 fi
 
 # build packages after successful compilation
@@ -722,6 +742,25 @@ then
     prepare_portable_native_interface_runtime "$PUBLISH_OUTPUT" "$OUT_BIN_DIR"
     export RID TFM
     $ROOT_PATH/tools/packaging/make_${DETECTED_OS}_portable.sh $params
+fi
+
+PACKAGES_OUT="${OUTPUT_DIRECTORY}/packages"
+
+# Generate package checksum files
+if [[ -d $PACKAGES_OUT ]]; then
+  (
+    cd "${PACKAGES_OUT}"
+    mkdir -p sha256sums
+    for package in *; do
+      if [[ ! -f $package ]]; then
+        continue
+      fi
+
+      CHECKSUM_FILE="sha256sums/${package}.sha256sum"
+      sha256sum "${package}" > "${CHECKSUM_FILE}"
+      echo "Generated checksum file for: ${package} -> ${CHECKSUM_FILE}"
+    done
+  )
 fi
 
 TFM="$OG_TFM"

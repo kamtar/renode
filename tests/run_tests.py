@@ -6,6 +6,9 @@ from __future__ import print_function
 import os
 import sys
 
+# We use UTF-8 in our test output.
+sys.stdout.reconfigure(encoding='utf-8')
+
 # Look for requirements.txt
 name = "requirements.txt"
 requirements = name
@@ -38,7 +41,7 @@ try:
         check_robot_version()
 
         tests_engine.register_handler('nunit', 'csproj', nunit_tests_provider.NUnitTestSuite, nunit_tests_provider.install_cli_arguments)
-        tests_engine.register_handler('robot', 'robot', robot_tests_provider.RobotTestSuite, robot_tests_provider.install_cli_arguments, robot_tests_provider.verify_cli_arguments)
+        tests_engine.register_handler('robot', ('robot', 'robot.rst'), robot_tests_provider.RobotTestSuite, robot_tests_provider.install_cli_arguments, robot_tests_provider.verify_cli_arguments)
         tests_engine.run()
 
 except ImportError as e:

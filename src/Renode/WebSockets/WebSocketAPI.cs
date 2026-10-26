@@ -112,7 +112,7 @@ namespace Antmicro.Renode.WebSockets
 
             SharedData.ClearEmulationEvent?.Invoke();
 
-            foreach(var endp in new List<string> { "/telnet/29169", "/telnet/29170" })
+            foreach(var endp in new List<string> { "/monitor", "/logs" })
             {
                 foreach(var conn in WebSocketsManager.Instance.GetConnections(endp))
                 {
@@ -277,7 +277,7 @@ namespace Antmicro.Renode.WebSockets
             var serializedEvent = JsonConvert.SerializeObject(eventResponse);
 
             Logger.Log(LogLevel.Debug, $"Event raised: {serializedEvent.ToString()}");
-            SharedData.MainConnection?.Send(Encoding.UTF8.GetBytes(serializedEvent));
+            webSocketServerProvider.Broadcast(Encoding.UTF8.GetBytes(serializedEvent));
         }
 
         private void SendErrorMessage(string version, int id)

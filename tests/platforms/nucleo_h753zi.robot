@@ -16,13 +16,15 @@ ${QSPI_RW}                          ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI
 ${QSPI_MemMapped}                   ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_MemoryMapped.elf-s_2152312-faec8bb984c61aabb52ae9eec1598999ea906a1c
 ${QSPI_XIP}                         ${PROJECT_URL}/stm32cubeh7--stm32h753zi-QSPI_ExecuteInPlace.elf-s_2233412-67befe44572c483b242a95ce8e714f75f4e7dc69
 ${PTP}                              ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_net_ptp.elf-s_4678660-79097838e7a15377e3d9ce083917220bd0705312
-${DHCP}                             ${PROJECT_URL}/nucleo_h753zi--zephyr-dhcp_client_server.elf-s_5285644-738a986f7b4250cd1a615e5c9767be20d89d82e0  # Zephyr netshell with DHCP client and server enabled
+${DHCP}                             ${PROJECT_URL}/nucleo_h753zi--zephyr-dhcp_client_server.elf-s_5285644-2dd96000c5757c860f650eae3c4b8f4613ec95c1  # Zephyr netshell with DHCP client and server enabled
 ${FLASH_EraseProgram}               ${PROJECT_URL}/stm32cubeh7--stm32h753zi-FLASH_EraseProgram.elf-s_2098720-fdf4d20c82c0619eee844117860017b477696298
 ${ADC_DMA_TEST}                     ${PROJECT_URL}/nucleo_h753zi--zephyr-tests_adc_api_dma.elf-s_1463928-1eb236532e593e96e263d98cf6200a0722dfd97f
 ${FLASH_IS25WP}                     ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_drivers_spi_flash.elf-s_642604-754f4c58cbd5ac817f6c77f5533ea3d9b83bb276
 ${CAN_COUNTER}                      ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_drivers_can_counter.elf-s_1324504-cc26c0ba1b4285b189ee6d73641ab3c81a5e6bdf
 ${CUBEMX_ETH_TEST}                  ${PROJECT_URL}/cubemx--stm32h7-eth-test.elf-s_1231644-3e808bfc20a3a96ad304acbc94c7dbd6b06245e5
 ${INTERRUPT_TEST}                   ${PROJECT_URL}/nucleo_h753zi--zephyr-tests_arm_interrupt.elf-s_1910156-ef375658d70a341eea0d85fab970d4ddac9f22d4
+${USB}                              ${PROJECT_URL}/nucleo_h753zi--zephyr-shell-cdc.elf-s_3030364-5067ae0e61cb460735c8e5c43f6a0000ccd17bdc
+${CRYPTO_SAMPLE}                    ${PROJECT_URL}/nucleo_h753zi--zephyr-samples_drivers_crypto.elf-s_1094020-1521d0c46a2b582aba095eff4e90135e5e9a524e
 
 ${PLATFORM}                         platforms/boards/nucleo_h753zi.repl
 
@@ -408,6 +410,7 @@ Should Resolve DHCP and Be Pingable
     Set Test Variable                   ${server_ip}  122.101.101.1
 
     Wait For Prompt on Uart             uart:~$  testerId=${server}
+    Wait For Prompt on Uart             uart:~$  testerId=${server}
     Write Line To Uart                  net dhcpv4 client stop 1  testerId=${server}
     Write Line To Uart                  net ipv4 del 1 192.0.2.1  testerId=${server}
     Write Line To Uart                  net ipv4 add 1 ${server_ip} 255.255.255.0  testerId=${server}
@@ -475,3 +478,36 @@ Should Pass Interrupt Test
 
     # test_arm_user_interrupt verifies that `MRS` hides registers in unpriviledged mode
     Wait For Test Pass                  test_arm_user_interrupt
+
+Should Communicate Over USB
+    Create Machine                      ${USB}  usb
+    Execute Command                     machine LoadPlatformDescriptionFromString "usb_uart: USB.USB_UART @ sysbus"
+    Execute Command                     usb_uart Register usb2 0
+    Create Terminal Tester              sysbus.usb_uart
+    Wait For Prompt On Uart             uart:~$
+    Write Line To Uart
+    Wait For Prompt On Uart             uart:~$
+    Write Line To Uart                  demo board
+    Wait For Line On Uart               nucleo_h753zi
+
+Should Pass Zephyr Encryption Sample
+    Create Machine                      ${CRYPTO_SAMPLE}  crypto_test
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=True
+
+    Wait For Line On Uart               .*: ECB mode ENCRYPT - Match  treatAsRegex=true
+    Wait For Line On Uart               .*: ECB mode DECRYPT - Match  treatAsRegex=true
+    Wait For Line On Uart               .*: CBC mode ENCRYPT - Match  treatAsRegex=true
+    Wait For Line On Uart               .*: CBC mode DECRYPT - Match  treatAsRegex=true
+    Wait For Line On Uart               .*: CTR mode ENCRYPT - Match  treatAsRegex=true
+    Wait For Line On Uart               .*: CTR mode DECRYPT - Match  treatAsRegex=true
+
+Should Not Run Out Of Ring Buffer Space When Writing Long Line To Uart
+    Create Machine                      ${DHCP}  overflow
+    Create Terminal Tester              ${UART}  defaultPauseEmulation=True
+    Execute Command                     showAnalyzer ${UART}
+    Register Failing Uart String        .*RX ring buffer full.*  treatAsRegex=true
+    Wait For Prompt On Uart             uart:~$
+    # Can't wait for echo because the shell will wrap this line while we're writing it
+    Write Line To Uart                  rem According to all known laws of aviation, there is no way that a bee should be able to fly. Its wings are too small to get its fat little body off the ground.  waitForEcho=false
+    Execute Command                     emulation RunFor "0.05"
+    Wait For Prompt On Uart             uart:~$

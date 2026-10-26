@@ -222,7 +222,6 @@ cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
             Assert.AreEqual("one with escaped quote\\", mock.Placeholder);
         }
 
-
         [Test]
         public void ShouldHandleMultilineQuotedStringInOneLine()
         {
@@ -579,7 +578,7 @@ peripheral:
         }
 
         [Test]
-        public void ShouldUpdateSingleInterrupt()
+        public void ShouldMergeSingleInterrupt()
         {
             var source = @"
 sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1>
@@ -591,7 +590,8 @@ sender:
             ProcessSource(source);
             MockIrqSender sender;
             Assert.IsTrue(machine.TryGetByName("sysbus.sender", out sender));
-            Assert.AreEqual(1, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(0, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(1, sender.Irq.Endpoints[1].Number);
         }
 
         [Test]
@@ -781,7 +781,89 @@ sender:
         }
 
         [Test]
-        public void ShouldUpdateDefaultIrq()
+        public void ShouldCancelAndReplaceIrqConnection()
+        {
+            var source = @"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1> { [Irq] -> receiver@[0] }
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver2@0";
+
+            ProcessSource(source);
+            MockIrqSender sender;
+            MockReceiver receiver2;
+            Assert.IsTrue(machine.TryGetByName("sysbus.sender", out sender));
+            Assert.IsTrue(machine.TryGetByName("sysbus.receiver2", out receiver2));
+            Assert.AreEqual(1, sender.Irq.Endpoints.Count);
+            Assert.AreEqual(receiver2, sender.Irq.Endpoints[0].Receiver);
+        }
+
+        [Test]
+        public void ShouldCancelAndReplaceIrqConnectionsInRange()
+        {
+            var source = @"
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral @ sysbus <0, 1>
+    gpios: 3
+    [0-1] -> receiver@[0-1]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+sender:
+    [1-2] -> none
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+sender:
+    [1-2] -> receiver2@[2-3]";
+
+            ProcessSource(source);
+            MockGPIOByNumberConnectorPeripheral sender;
+            MockReceiver receiver;
+            MockReceiver receiver2;
+            Assert.IsTrue(machine.TryGetByName("sysbus.sender", out sender));
+            Assert.IsTrue(machine.TryGetByName("sysbus.receiver", out receiver));
+            Assert.IsTrue(machine.TryGetByName("sysbus.receiver2", out receiver2));
+
+            Assert.AreEqual(0, sender.Connections[0].Endpoints[0].Number);
+            Assert.AreEqual(receiver, sender.Connections[0].Endpoints[0].Receiver);
+
+            Assert.AreEqual(1, sender.Connections[1].Endpoints.Count);
+            Assert.AreEqual(2, sender.Connections[1].Endpoints[0].Number);
+            Assert.AreEqual(receiver2, sender.Connections[1].Endpoints[0].Receiver);
+
+            Assert.AreEqual(3, sender.Connections[2].Endpoints[0].Number);
+            Assert.AreEqual(receiver2, sender.Connections[2].Endpoints[0].Receiver);
+        }
+
+        [Test]
+        public void ShouldCancelIrqConnectionsMultipleTimes()
+        {
+            var source = @"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1> { [Irq] -> receiver@[0] }
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>
+receiver3: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <3, 4>
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver2@0
+sender:
+    Irq -> none
+sender:
+    Irq -> receiver3@0";
+            ProcessSource(source);
+
+            MockIrqSender sender;
+            MockReceiver receiver3;
+            Assert.IsTrue(machine.TryGetByName("sysbus.sender", out sender));
+            Assert.IsTrue(machine.TryGetByName("sysbus.receiver3", out receiver3));
+
+            Assert.AreEqual(1, sender.Irq.Endpoints.Count);
+            Assert.AreEqual(0, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(receiver3, sender.Irq.Endpoints[0].Receiver);
+        }
+
+        [Test]
+        public void ShouldMergeWithDefaultIrq()
         {
             var source = @"
 sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1>
@@ -793,11 +875,12 @@ sender:
             ProcessSource(source);
             MockIrqSender sender;
             Assert.IsTrue(machine.TryGetByName("sysbus.sender", out sender));
-            Assert.AreEqual(2, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(0, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(2, sender.Irq.Endpoints[1].Number);
         }
 
         [Test]
-        public void ShouldUpdateMultiInterrupts()
+        public void ShouldMergeMultiInterrupts()
         {
             var a = @"
 sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral @ sysbus <0, 1>
@@ -823,26 +906,59 @@ sender:
             Assert.IsTrue(machine.TryGetByName("sysbus.receiver", out receiver1));
             Assert.IsTrue(machine.TryGetByName("sysbus.receiver2", out receiver2));
 
-            Assert.AreEqual(0, sender.Irq.Endpoints[0].Number);
-            Assert.AreEqual(receiver2, sender.Irq.Endpoints[0].Receiver);
+            Assert.AreEqual(6, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(receiver1, sender.Irq.Endpoints[0].Receiver);
+            Assert.AreEqual(14, sender.Irq.Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.Irq.Endpoints[1].Receiver);
+            Assert.AreEqual(0, sender.Irq.Endpoints[2].Number);
+            Assert.AreEqual(receiver2, sender.Irq.Endpoints[2].Receiver);
+
+            Assert.AreEqual(2, sender.OtherIrq.Endpoints.Count);
             Assert.AreEqual(7, sender.OtherIrq.Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.OtherIrq.Endpoints[0].Receiver);
+            Assert.AreEqual(15, sender.OtherIrq.Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.OtherIrq.Endpoints[1].Receiver);
+
             Assert.AreEqual(0, sender.Connections[0].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[0].Endpoints[0].Receiver);
+
             Assert.AreEqual(1, sender.Connections[1].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[1].Endpoints[0].Receiver);
+
             Assert.AreEqual(2, sender.Connections[2].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[2].Endpoints[0].Receiver);
-            Assert.AreEqual(1, sender.Connections[3].Endpoints[0].Number);
-            Assert.AreEqual(receiver2, sender.Connections[3].Endpoints[0].Receiver);
-            Assert.AreEqual(2, sender.Connections[4].Endpoints[0].Number);
-            Assert.AreEqual(receiver2, sender.Connections[4].Endpoints[0].Receiver);
+
+            Assert.AreEqual(3, sender.Connections[3].Endpoints.Count);
+            Assert.AreEqual(3, sender.Connections[3].Endpoints[0].Number);
+            Assert.AreEqual(receiver1, sender.Connections[3].Endpoints[0].Receiver);
+            Assert.AreEqual(11, sender.Connections[3].Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.Connections[3].Endpoints[1].Receiver);
+            Assert.AreEqual(1, sender.Connections[3].Endpoints[2].Number);
+            Assert.AreEqual(receiver2, sender.Connections[3].Endpoints[2].Receiver);
+
+            Assert.AreEqual(3, sender.Connections[4].Endpoints.Count);
+            Assert.AreEqual(4, sender.Connections[4].Endpoints[0].Number);
+            Assert.AreEqual(receiver1, sender.Connections[4].Endpoints[0].Receiver);
+            Assert.AreEqual(12, sender.Connections[4].Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.Connections[4].Endpoints[1].Receiver);
+            Assert.AreEqual(2, sender.Connections[4].Endpoints[2].Number);
+            Assert.AreEqual(receiver2, sender.Connections[4].Endpoints[2].Receiver);
+
+            Assert.AreEqual(2, sender.Connections[5].Endpoints.Count);
             Assert.AreEqual(5, sender.Connections[5].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[5].Endpoints[0].Receiver);
-            Assert.AreEqual(16, sender.Connections[6].Endpoints[0].Number);
-            Assert.AreEqual(receiver1, sender.Connections[6].Endpoints[0].Receiver);
+            Assert.AreEqual(13, sender.Connections[5].Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.Connections[1].Endpoints[0].Receiver);
+
+            Assert.AreEqual(2, sender.Connections[6].Endpoints.Count);
+            Assert.AreEqual(7, sender.Connections[6].Endpoints[0].Number);
+            Assert.AreEqual(receiver2, sender.Connections[6].Endpoints[0].Receiver);
+            Assert.AreEqual(16, sender.Connections[6].Endpoints[1].Number);
+            Assert.AreEqual(receiver1, sender.Connections[6].Endpoints[1].Receiver);
+
             Assert.AreEqual(17, sender.Connections[7].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[7].Endpoints[0].Receiver);
+
             Assert.AreEqual(18, sender.Connections[8].Endpoints[0].Number);
             Assert.AreEqual(receiver1, sender.Connections[8].Endpoints[0].Receiver);
         }
@@ -860,10 +976,8 @@ sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts @ sysbus
             Assert.IsTrue(machine.TryGetByName("sysbus.sender", out MockIrqSenderWithTwoInterrupts sender));
             Assert.IsTrue(machine.TryGetByName("sysbus.receiver", out MockReceiver receiver));
 
-            // Interrupt attributes are processed in reverse order, this is
-            // observable if automatic combined input generation is used.
-            Assert.AreEqual(1, sender.Irq.Endpoints[0].Number);
-            Assert.AreEqual(0, sender.AnotherIrq.Endpoints[0].Number);
+            Assert.AreEqual(0, sender.Irq.Endpoints[0].Number);
+            Assert.AreEqual(1, sender.AnotherIrq.Endpoints[0].Number);
             Assert.IsInstanceOf(typeof(CombinedInput), sender.Irq.Endpoints[0].Receiver);
             var combiner = (CombinedInput)sender.Irq.Endpoints[0].Receiver;
             Assert.AreEqual(0, combiner.OutputLine.Endpoints[0].Number);
@@ -906,7 +1020,7 @@ newCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 2
         public void ShouldNotDetectCycleInPerCoreRegistration()
         {
             var source = @"
-core1_nvic: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration { 
+core1_nvic: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration {
     address: 0xE000E000;
     cpu: cpu1
 }
@@ -1008,7 +1122,6 @@ peri:
         echo 'test 2'
         echo 'test 3'";
 
-
             ProcessSource(source);
             scriptHandlerMock.Verify(x => x.Execute(null, new[] { "echo 'test 1'", "echo 'test 2'", "echo 'test 3'" }, It.IsAny<Action<string>>()));
         }
@@ -1078,7 +1191,6 @@ peri:
         Increment 2
         Increment 3";
 
-
             ProcessSource(source);
             scriptHandlerMock.Verify(x => x.Execute(It.IsAny<IScriptable>(), new[] { "Increment 1", "Increment 2", "Increment 3" }, It.IsAny<Action<string>>()));
         }
@@ -1146,7 +1258,6 @@ peri:
     reset add:
         Increment 2
         Increment 3";
-
 
             ProcessSource(source);
             scriptHandlerMock.Verify(x => x.RegisterReset(It.IsAny<IScriptable>(), new[] { "Increment 1", "Increment 2", "Increment 3" }, It.IsAny<Action<string>>()));
@@ -1313,7 +1424,7 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
             var source = @"
 peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ {
     sysbus <0x100, +0x100>;
-    sysbus <0x150, +0x100>    
+    sysbus <0x150, +0x100>
 }";
 
             var exception = Assert.Throws<ParsingException>(() => ProcessSource(source));

@@ -1,6 +1,4 @@
 *** Settings ***
-Suite Setup                         Setup
-Suite Teardown                      Teardown
 Library                             Process
 Resource                            ${RENODEKEYWORDS}
 Library                             ${CURDIR}/gdb_library.py
@@ -21,6 +19,8 @@ ${PLATFORM}                         SEPARATOR=\n  """
 ...                                 nvic: IRQControllers.NVIC @ sysbus 0xe000e000
 ...                                 ${SPACE*4}-> cpu@0
 ...                                 """
+
+${FIRST_S_REG}                      75
 
 *** Keywords ***
 Prepare Platform
@@ -67,4 +67,24 @@ Test VFP registers
     FOR  ${index}  IN RANGE  32
         ${expected}=                    Evaluate  100.0 + ${index}
         Compare S Register              ${index}  ${expected}
+    END
+
+Test VFP Registers On ARMv7R
+    Execute Command                 mach create
+    Execute Command                 machine LoadPlatformDescriptionFromString "cpu: CPU.ARMv7R @ sysbus { cpuType: \\"cortex-r5f\\" }"
+    Execute Command                 machine LoadPlatformDescriptionFromString "mem: Memory.MappedMemory @ sysbus 0x0 { size: 0x1000 }"
+    Execute Command                 machine StartGdbServer ${GDB_REMOTE_PORT}
+
+    Check And Run Gdb               arm-zephyr-eabi-gdb
+
+    FOR    ${reg}    IN RANGE  32
+        ${renode_reg}=              Evaluate  ${reg} + ${FIRST_S_REG}
+        ${float_val}=               Evaluate  ${reg} * 1.5
+        ${hex_val}=                 Evaluate  hex(struct.unpack('<I', struct.pack('<f', ${float_val}))[0])  modules=struct
+        Execute Command             cpu SetRegister ${renode_reg} ${hex_val}
+    END
+
+    FOR    ${reg}    IN RANGE  32
+        ${float_val}=               Evaluate  ${reg} * 1.5
+        Compare S Register          ${reg}  ${float_val}
     END

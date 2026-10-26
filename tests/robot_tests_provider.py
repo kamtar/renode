@@ -14,6 +14,7 @@ import uuid
 import re
 import signal
 from collections import OrderedDict, defaultdict
+from copy import deepcopy
 from time import monotonic, sleep
 from typing import List, Dict, Tuple, Set, Optional, Union
 from argparse import Namespace
@@ -28,6 +29,10 @@ import urllib.parse
 
 from tests_engine import TestResult, TestTag, CRITICAL_TEST
 from unstable_tests import KnownUnstableSuite, filter_unstable
+from retry_and_timeout_listener import retry_and_timeout_listener
+from state_dependency_listener import StateDependencyListener
+import robot_output_formatter
+import robot_output_formatter_verbose
 
 this_path = os.path.abspath(os.path.dirname(__file__))
 
@@ -199,6 +204,7 @@ def install_cli_arguments(parser):
                         help="Port of robot framework remote server binary. Use '0' to automatically select any unused private port.")
 
     parser.add_argument("--enable-xwt",
+                        "--enable-gui",
                         dest="enable_xwt",
                         action="store_true",
                         default=False,
@@ -439,8 +445,10 @@ class RobotTestSuite(object):
     robot_frontend_process = None
     renode_pid = -1  # It's not always robot_frontend_process.pid, e.g., with `--run-gdb` option.
     hotspot_action = ['None', 'Pause', 'Serialize']
-    # Used to share the port between all suites when running sequentially
+    # Used to share the port, directory and command used by Renode between all suites when running sequentially
     remote_server_port = -1
+    remote_server_directory = None
+    remote_server_command = []
     retry_test_regex = re.compile(r"\[RETRY\] (PASS|FAIL) on (\d+)\. retry\.")
     retry_suite_regex = re.compile(r"|".join((
             r"\[Errno \d+\] Connection refused",
@@ -455,12 +463,13 @@ class RobotTestSuite(object):
         self.path = path
         self.known_unstable: Optional[KnownUnstableSuite] = None
         self._dependencies_met = set()
-        self.remote_server_directory = None
+        self.missing_state_reasons: dict[str, str] = {}
         # Subset of RobotTestSuite.log_files which are "owned" by the running instance
         self.suite_log_files = None
 
         self.tests_with_hotspots = []
         self.tests_without_hotspots = []
+        self.selected_tests: List[Tuple[Optional[str], List[str]]] = []
 
 
     def get_output_dir(self, options, iteration_index, suite_retry_index):
@@ -471,9 +480,7 @@ class RobotTestSuite(object):
         )
 
 
-    def prepare(self, options):
-        RobotTestSuite.instances_count += 1
-
+    def _find_tests(self) -> robot.running.TestSuite:
         hotSpotTestFinder = TestsFinder(keyword="Handle Hot Spot")
         suiteBuilder = robot.running.builder.TestSuiteBuilder()
         suite = suiteBuilder.build(self.path)
@@ -481,6 +488,41 @@ class RobotTestSuite(object):
 
         self.tests_with_hotspots = [test.name for test in hotSpotTestFinder.tests_matching]
         self.tests_without_hotspots = [test.name for test in hotSpotTestFinder.tests_not_matching]
+        return suite
+
+
+    def select_tests(self, options: Namespace) -> bool:
+        """Select tests and return whether the suite should remain scheduled."""
+        self.selected_tests = []
+        if self.path.endswith('renode-keywords.robot'):
+            print('Ignoring helper file: {}'.format(self.path))
+            return False
+
+        suite = self._find_tests()
+
+        # Hot-spot tests run once per selected action. Fixture matching includes
+        # the action in the suite name, so filter each variant separately.
+        variants: List[Tuple[Optional[str], List[str]]] = [(None, self.tests_without_hotspots)]
+        variants.extend((hotspot, self.tests_with_hotspots)
+                        for hotspot in self.hotspot_action
+                        if not options.hotspot or options.hotspot == hotspot)
+
+        for hotspot, test_names in variants:
+            if not test_names:
+                continue
+
+            # Robot filters and renames the model in place, so make a copy.
+            suite_copy = deepcopy(suite)
+            selected = self._get_test_suite(options, test_names, options.fixture, hotspot,
+                                            suite=suite_copy)
+            if selected.test_count:
+                self.selected_tests.append((hotspot, [test.name for test in selected.tests]))
+
+        return len(self.selected_tests) > 0
+
+
+    def prepare(self, options):
+        RobotTestSuite.instances_count += 1
 
         # In parallel runs, Renode is started for each suite.
         # The same is done in sequential runs with --keep-renode-output.
@@ -504,8 +546,8 @@ class RobotTestSuite(object):
 
         prepend_dotnet = options.remote_server_name.endswith('.dll')
 
-        self.remote_server_directory = options.remote_server_full_directory
-        remote_server_binary = os.path.join(self.remote_server_directory, options.remote_server_name)
+        RobotTestSuite.remote_server_directory = options.remote_server_full_directory
+        remote_server_binary = os.path.join(RobotTestSuite.remote_server_directory, options.remote_server_name)
 
         if not os.path.isfile(remote_server_binary):
             raise Exception("Robot framework remote server binary not found: '{}'! Did you forget to build?".format(remote_server_binary))
@@ -515,21 +557,25 @@ class RobotTestSuite(object):
         if remote_server_port != 0 and not is_port_available(remote_server_port, options.autokill_renode):
             raise Exception("The selected port {} is not available".format(remote_server_port))
 
-        command = [remote_server_binary, '--robot-server-port', str(remote_server_port)]
+        command = [remote_server_binary]
+
+        if prepend_dotnet:
+            command.insert(0, 'dotnet')
         if not options.show_log and not options.keep_renode_output:
             command.append('--hide-log')
         if not options.enable_xwt:
             command.append('--disable-gui')
-        if options.debug_on_error:
-            command.append('--robot-debug-on-error')
         if options.keep_temps:
             command.append('--keep-temporary-files')
         if options.renode_config:
             command.append('--config')
             command.append(options.renode_config)
 
-        if prepend_dotnet:
-            command.insert(0, 'dotnet')
+        RobotTestSuite.remote_server_command = list(command) # For the purpose of running another Renode in a test
+
+        if options.debug_on_error:
+            command.append('--robot-debug-on-error')
+        command.extend(['--robot-server-port', str(remote_server_port)])
 
         renode_command = command
         stdout_path, stderr_path = None, None
@@ -537,7 +583,7 @@ class RobotTestSuite(object):
         # if we started GDB, wait for the user to start Renode as a child process
         if options.run_gdb:
             command = ['gdb', '-nx', '-ex', 'handle SIG34 nostop noprint', '--args'] + command
-            process = psutil.Popen(command, cwd=self.remote_server_directory, bufsize=1)
+            process = psutil.Popen(command, cwd=RobotTestSuite.remote_server_directory, bufsize=1)
 
             if options.keep_renode_output:
                 print("Note: --keep-renode-output is not supported when using --run-gdb")
@@ -568,9 +614,9 @@ class RobotTestSuite(object):
             print(f"WARNING: perf stdout and stderr is being redirected to {stdout_path}")
 
             perf_stdout_stderr_file = open(stdout_path, "w")
-            process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=perf_stdout_stderr_file, stderr=perf_stdout_stderr_file, creationflags=CREATE_NEW_PROCESS_GROUP)
+            process = subprocess.Popen(command, cwd=RobotTestSuite.remote_server_directory, bufsize=1, stdout=perf_stdout_stderr_file, stderr=perf_stdout_stderr_file, creationflags=CREATE_NEW_PROCESS_GROUP)
 
-            pid_file_path = os.path.join(self.remote_server_directory, pid_filename)
+            pid_file_path = os.path.join(RobotTestSuite.remote_server_directory, pid_filename)
             perf_renode_timeout = 10
 
             if process.pid == -1:
@@ -598,13 +644,13 @@ class RobotTestSuite(object):
                 stderr_path = os.path.join(logs_dir, f"{suite_name}.renode_stderr.log")
                 fout = open(stdout_path, "wb", buffering=0)
                 ferr = open(stderr_path, "wb", buffering=0)
-                process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, stdout=fout, stderr=ferr, creationflags=CREATE_NEW_PROCESS_GROUP)
+                process = subprocess.Popen(command, cwd=RobotTestSuite.remote_server_directory, bufsize=1, stdout=fout, stderr=ferr, creationflags=CREATE_NEW_PROCESS_GROUP)
                 if process.pid == -1:
                     report_dead_subprocess(process)
 
                 self.renode_pid = process.pid
             else:
-                process = subprocess.Popen(command, cwd=self.remote_server_directory, bufsize=1, creationflags=CREATE_NEW_PROCESS_GROUP)
+                process = subprocess.Popen(command, cwd=RobotTestSuite.remote_server_directory, bufsize=1, creationflags=CREATE_NEW_PROCESS_GROUP)
                 if process.pid == -1:
                     report_dead_subprocess(process)
                 self.renode_pid = process.pid
@@ -680,7 +726,7 @@ class RobotTestSuite(object):
         print(process_summary)
 
     def __move_perf_data(self, options):
-        perf_data_path = os.path.join(self.remote_server_directory, "perf.data")
+        perf_data_path = os.path.join(RobotTestSuite.remote_server_directory, "perf.data")
 
         if not perf_data_path:
             raise RuntimeError("perf.data file was not generated succesfully")
@@ -758,28 +804,11 @@ class RobotTestSuite(object):
         if status.text is not None and cls.retry_suite_regex.search(status.text):
             return True
         else:
-            return any(cls.retry_suite_regex.search(msg.text) for msg in test.iter("msg"))
+            return any(cls.retry_suite_regex.search(msg.text) for msg in test.iter("msg") if msg.text is not None)
 
 
     def run(self, options, iteration_index=1, suite_retry_index=0):
-        if self.path.endswith('renode-keywords.robot'):
-            print('Ignoring helper file: {}'.format(self.path))
-            return True
-
-        tests_len = 0
-        suites_with_hotspots = []
-        if any(self.tests_without_hotspots):
-            suite_without_hotspots = self._get_test_suite(options, self.tests_without_hotspots, options.fixture, None)
-            tests_len = len(suite_without_hotspots.tests)
-        if any(self.tests_with_hotspots):
-            for hotspot in RobotTestSuite.hotspot_action:
-                if options.hotspot and options.hotspot != hotspot:
-                    continue
-                suite_with_hotspots = self._get_test_suite(options, self.tests_with_hotspots, options.fixture, hotspot)
-                suites_with_hotspots.append((hotspot, suite_with_hotspots))
-                tests_len += len(suite_with_hotspots.tests)
-
-        if tests_len == 0:
+        if not self.selected_tests:
             return TestResult(True, [])
 
         # The list is cleared only on the first run attempt in each iteration so
@@ -797,7 +826,7 @@ class RobotTestSuite(object):
             # shared, they're only needed to restart Renode in timeout handler.
             RobotTestSuite.robot_frontend_process = self._run_remote_server(options, iteration_index, suite_retry_index)
 
-        print(f'Running suite on Renode pid {self.renode_pid} using port {self.remote_server_port}: {self.path}')
+        print(f'Running suite on Renode pid {self.renode_pid} using port {self.remote_server_port}: {self.path}', flush=True)
 
         result = None
         def get_result():
@@ -805,22 +834,15 @@ class RobotTestSuite(object):
 
         start_timestamp = monotonic()
 
-        if any(self.tests_without_hotspots):
-            result = get_result().ok and self._run_inner(suite_without_hotspots,
+        for hotspot, test_names in self.selected_tests:
+            suite = self._get_test_suite(options, test_names, None, hotspot)
+            result = get_result().ok and self._run_inner(suite,
                                                          options.fixture,
-                                                         None,
-                                                         self.tests_without_hotspots,
+                                                         hotspot,
+                                                         test_names,
                                                          options,
                                                          iteration_index,
                                                          suite_retry_index)
-        for hotspot, suite in suites_with_hotspots:
-                result = get_result().ok and self._run_inner(suite,
-                                                             options.fixture,
-                                                             hotspot,
-                                                             self.tests_with_hotspots,
-                                                             options,
-                                                             iteration_index,
-                                                             suite_retry_index)
 
         end_timestamp = monotonic()
 
@@ -1010,15 +1032,17 @@ class RobotTestSuite(object):
         suite = self._get_test_suite(options, test_cases_names, None, None)
         return self._run_inner(suite, None, None, test_cases_names, options, iteration_index, suite_retry_index)
 
-    def _get_test_suite(self, options, test_cases_names, fixture, hotspot):
+    def _get_test_suite(self, options, test_cases_names, fixture, hotspot,
+                        suite: Optional[robot.running.TestSuite] = None):
         file_name = os.path.splitext(os.path.basename(self.path))[0]
         suite_name = RobotTestSuite._create_suite_name(file_name, hotspot)
 
         test_cases = [(test_name, '{0}.{1}'.format(suite_name, test_name)) for test_name in test_cases_names]
         if fixture:
             test_cases = [x for x in test_cases if fnmatch.fnmatch(x[1], '*' + fixture + '*')]
-        suite_builder = robot.running.builder.TestSuiteBuilder()
-        suite = suite_builder.build(self.path)
+        if suite is None:
+            suite = robot.running.builder.TestSuiteBuilder().build(self.path)
+
         suite.resource.imports.create(type="Resource", name=keywords_path)
 
         metadata = {"HotSpot_Action": hotspot if hotspot else '-'}
@@ -1027,9 +1051,9 @@ class RobotTestSuite(object):
                             name=suite_name, empty_suite_ok=True)
         # Provide default values for {Suite,Test}{Setup,Teardown}
         if not suite.setup:
-            suite.setup.config(name="Setup")
+            suite.setup.config(name="Renode Suite Setup")
         if not suite.teardown:
-            suite.teardown.config(name="Teardown")
+            suite.teardown.config(name="Renode Suite Teardown")
         return suite
 
     def _run_inner(self, suite, fixture, hotspot, test_cases_names, options, iteration_index=1, suite_retry_index=0):
@@ -1039,7 +1063,8 @@ class RobotTestSuite(object):
         output_dir = self.get_output_dir(options, iteration_index, suite_retry_index)
         variables = [
             'SKIP_RUNNING_SERVER:True',
-            'DIRECTORY:{}'.format(self.remote_server_directory),
+            'DIRECTORY:{}'.format(RobotTestSuite.remote_server_directory),
+            'COMMAND:{}'.format(subprocess.list2cmdline(RobotTestSuite.remote_server_command)),
             'PORT_NUMBER:{}'.format(self.remote_server_port),
             'RESULTS_DIRECTORY:{}'.format(output_dir),
             'BINARY_NAME:{}'.format(options.remote_server_name),
@@ -1073,11 +1098,13 @@ class RobotTestSuite(object):
                 return TestResult(False, None)
 
         # Listeners are called in the exact order as in `listeners` list for both `start_test` and `end_test`.
-        output_formatter = 'robot_output_formatter_verbose.py' if options.verbose else 'robot_output_formatter.py'
+        output_formatter = robot_output_formatter_verbose if options.verbose else robot_output_formatter
         listeners = [
-            os.path.join(this_path, f'retry_and_timeout_listener.py:{options.retry_count}'),
+            retry_and_timeout_listener(options.retry_count),
+            # Has to be after `retry_and_timeout_listener` to see which attempts will be retried.
+            StateDependencyListener(self.missing_state_reasons),
             # Has to be the last one to print final state, message etc. after all the changes made by other listeners.
-            os.path.join(this_path, output_formatter),
+            output_formatter,
         ]
         if options.listener:
             listeners += options.listener
@@ -1092,9 +1119,9 @@ class RobotTestSuite(object):
 
         for test in suite.tests:
             if not test.setup:
-                test.setup.config(name="Reset Emulation")
+                test.setup.config(name="Renode Test Setup")
             if not test.teardown:
-                test.teardown.config(name="Test Teardown")
+                test.teardown.config(name="Renode Test Teardown")
 
             # Let's just fail tests which previously unexpectedly timed out.
             if test.name in self.tests_with_unexpected_timeouts:
@@ -1156,7 +1183,8 @@ class RobotTestSuite(object):
                 # Tests with unexpected timeouts won't be retried.
                 self.tests_with_unexpected_timeouts = test.name
             print(f"{message_start} after {Time(test.timeout).seconds}s: {test.parent.name}.{test.name}")
-            print(f"----- Skipped flushing emulation log and saving state due to the timeout, restarting Renode...")
+            BuiltIn().run_keyword("Print Log Saved Message")
+            print(f"----- Skipped saving state due to the timeout, restarting Renode...")
 
             self._close_remote_server(RobotTestSuite.robot_frontend_process, options)
             RobotTestSuite.robot_frontend_process = self._run_remote_server(options, iteration_index, suite_retry_index)

@@ -11,7 +11,10 @@ using System.Runtime.InteropServices;
 using System.Threading;
 
 using Antmicro.Renode.Core;
+using Antmicro.Renode.Peripherals;
+using Antmicro.Renode.Peripherals.UART;
 using Antmicro.Renode.UI;
+using Antmicro.Renode.Logging;
 
 using CommandInteractionEater = Antmicro.Renode.UserInterface.CommandInteractionEater;
 using Monitor = Antmicro.Renode.UserInterface.Monitor;
@@ -91,6 +94,144 @@ namespace Antmicro.Renode.NativeInterface
             }
         }
 
+        /// <summary>
+        /// Adds handler triggered on new log entry.
+        /// The callback receives
+        /// <list type="bullet">
+        /// <item>Pointer earlier provided by the user through the opaque argument</item>
+        /// <item>Level of the message</item>
+        /// <item>Tick at which message happened</item>
+        /// <item>Pointer to name of the object that wrote the log</item>
+        /// <item>Pointer to the message</item>
+        /// </list>
+        /// Pointers will be freed after return from the callback.
+        /// If NULL is provided as name pointer, default logger backend name is used.
+        /// </summary>
+        [UnmanagedCallersOnly(EntryPoint = "renode_add_logging_handler")]
+        // Keep in sync with LogLevel
+        [DNNE.C99DeclCode("""
+                          typedef enum RenodeLogLevel { RENODE_LOG_LEVEL_NOISY = -1, RENODE_LOG_LEVEL_DEBUG = 0, RENODE_LOG_LEVEL_INFO = 1, RENODE_LOG_LEVEL_WARNING = 2, RENODE_LOG_LEVEL_ERROR = 3 } RenodeLogLevel;
+                          typedef void (*RenodeLogHandler)(void*, RenodeLogLevel, long long int, char*, char*);
+                          """)]
+        [return: DNNE.C99Type("RenodeStatus")]
+        public static NativeStatus AddLoggingHandler(
+            [DNNE.C99Type("RenodeLogHandler")] delegate* unmanaged<void*, int, long, byte*, byte*, void> handler,
+            [DNNE.C99Type("void *")] byte* opaque,
+            [DNNE.C99Type("const char *")] byte* namePtr
+        )
+        {
+            if(handler == null)
+            {
+                return NativeStatus.CommandError;
+            }
+
+            var nameString = DefaultNativeLoggerName;
+            if(namePtr != null)
+            {
+                nameString = Marshal.PtrToStringUTF8((IntPtr)namePtr);
+            }
+
+            try
+            {
+                Logger.AddBackend(new NativeExportsBackend(handler, opaque), nameString);
+            }
+            catch(Exception ex)
+            {
+                Console.Error.WriteLine($"Exception: {ex}");
+                return NativeStatus.Exception;
+            }
+
+            return NativeStatus.Success;
+        }
+
+        [UnmanagedCallersOnly(EntryPoint = "renode_remove_logging_handler")]
+        [return: DNNE.C99Type("RenodeStatus")]
+        public static NativeStatus RemoveLoggingHandler(
+            [DNNE.C99Type("const char *")] byte* namePtr
+        )
+        {
+            var nameString = DefaultNativeLoggerName;
+            if(namePtr != null)
+            {
+                nameString = Marshal.PtrToStringUTF8((IntPtr)namePtr);
+            }
+
+            var backends = Logger.GetBackends();
+            if(!backends.TryGetValue(nameString, out var backend))
+            {
+                return NativeStatus.CommandError;
+            }
+
+            Logger.RemoveBackend(backend);
+            return NativeStatus.Success;
+        }
+
+        /// <summary>
+        /// Creates UART analyzer communicating data through native handlers
+        /// </summary>
+        /// <param name="readHandler">Handler that will receive characters written to uart. Use NULL to ignore</param>
+        /// <param name="writeHandler">Pointer to a function pointer. Will point to callback used for writing to uart. Use NULL to ignore</param>
+        /// <param name="machName">Name of the machine containing the uart peripheral</param>
+        /// <param name="periName">Name of the uart peripheral</param>
+        /// <param name="opaque">Pointer to custom user data that will be always passed to the handler</param>
+        /// <param name="namePtr">Name of the analyzer. Used to add custom name by which analyzer will be referred to in the monitor. Use NULL to use default name</param>
+        [UnmanagedCallersOnly(EntryPoint = "renode_add_uart_analyzer")]
+        [return: DNNE.C99Type("RenodeStatus")]
+        [DNNE.C99DeclCode("""
+                          typedef void (*RenodeUartReadHandler)(void*, char);
+                          typedef void (*RenodeUartWriteHandler)(char);
+                          """)]
+        public static NativeStatus AddUartAnalyzer(
+            [DNNE.C99Type("RenodeUartReadHandler")] delegate* unmanaged<void*, byte, void> readHandler,
+            [DNNE.C99Type("RenodeUartWriteHandler* ")] delegate* unmanaged<byte, void>* writeHandler,
+            [DNNE.C99Type("const char *")] byte* machName,
+            [DNNE.C99Type("const char *")] byte* periName,
+            [DNNE.C99Type("void *")] byte* opaque,
+            [DNNE.C99Type("const char *")] byte* namePtr
+        )
+        {
+            if(!Generics.TryGetPeripheral<IUART>(machName, periName, out var uartPeripheral))
+            {
+                return NativeStatus.CommandError;
+            }
+
+            var emu = EmulationManager.Instance.CurrentEmulation;
+            if(!emu.BackendManager.TryGetBackendFor(uartPeripheral, out var backend))
+            {
+                Console.Error.WriteLine($"No backend found for {uartPeripheral}");
+                return NativeStatus.CommandError;
+            }
+
+            var analyzer = new NativeExportsUartAnalyzer(readHandler, opaque);
+            if(!emu.BackendManager.TryAddAnalyzer(backend as UARTBackend, analyzer))
+            {
+                Console.Error.WriteLine($"Can't add analyzer for {uartPeripheral}");
+                return NativeStatus.CommandError;
+            }
+
+            string nameString;
+            if(namePtr == null)
+            {
+                var machineName = Marshal.PtrToStringUTF8((IntPtr)machName);
+                var peripheralName = Marshal.PtrToStringUTF8((IntPtr)periName);
+                nameString = $"{machineName}_{peripheralName}_{DefaultNativeUartAnalyzerSuffix}";
+            }
+            else
+            {
+                nameString = Marshal.PtrToStringUTF8((IntPtr)namePtr);
+            }
+
+            emu.ExternalsManager.AddExternal(analyzer, nameString);
+            analyzer.Show();
+
+            if(writeHandler != null)
+            {
+                *writeHandler = analyzer.WriteCallback;
+            }
+
+            return NativeStatus.Success;
+        }
+
         private static unsafe void CopyStringToBuffer(string text, byte* buf, int size)
         {
             if(buf == (byte*)0 || size <= 0)
@@ -148,15 +289,18 @@ namespace Antmicro.Renode.NativeInterface
             renodeThread.Name = "Renode";
             renodeThread.Start();
 
-            // Wait until the Monitor is registered
+            // Wait until the Monitor is registered and has its writer.
             do
             {
                 Thread.Sleep(50);
                 monitor = (Monitor)ObjectCreator.Instance.GetSurrogate(typeof(Monitor));
-            } while(monitor == null);
+            } while(monitor?.Interaction == null);
         }
 
         private static Monitor monitor;
+
+        private const string DefaultNativeLoggerName = "native";
+        private const string DefaultNativeUartAnalyzerSuffix = "nativeAnalyzer";
 
         /// <remarks>
         /// Keep in sync with RenodeStatus in the C99DeclCode attribute of <see cref="Init"/>
@@ -167,6 +311,79 @@ namespace Antmicro.Renode.NativeInterface
             CommandError = 1,
             QuitRequested = 2,
             Exception = -1
+        }
+
+        private static unsafe class Generics
+        {
+            public static bool TryGetPeripheral<T>(byte* machName, byte* periName, out T peripheral) where T : class, IPeripheral
+            {
+                peripheral = null;
+                var peripheralName = Marshal.PtrToStringUTF8((IntPtr)periName);
+
+                if(string.IsNullOrEmpty(peripheralName))
+                {
+                    return false;
+                }
+
+                if(!TryGetMachine(machName, out var m))
+                {
+                    return false;
+                }
+
+                if(!m.TryGetByName<T>(peripheralName, out var p))
+                {
+                    Console.Error.WriteLine($"No peripheral with name {peripheralName}");
+                    return false;
+                }
+                peripheral = p;
+                return true;
+            }
+
+            public static bool TryGetMachine(byte* machName, out IMachine machine)
+            {
+                machine = null;
+                var machineName = Marshal.PtrToStringUTF8((IntPtr)machName);
+
+                if(string.IsNullOrEmpty(machineName))
+                {
+                    return false;
+                }
+
+                if(EmulationManager.Instance == null)
+                {
+                    Console.Error.WriteLine("Emulation Manager instance is not initialized");
+                    return false;
+                }
+
+                var e = EmulationManager.Instance.CurrentEmulation;
+
+                if(!e.TryGetMachineByName(machineName, out var m))
+                {
+                    Console.Error.WriteLine($"No machine with name {machineName}");
+                    return false;
+                }
+                machine = m;
+                return true;
+            }
+
+            public static bool TryGetPeripheral<T>(IntPtr machine, byte* periName, out T peripheral) where T : class, IPeripheral
+            {
+                peripheral = null;
+                var peripheralName = Marshal.PtrToStringUTF8((IntPtr)periName);
+
+                if(machine == IntPtr.Zero || string.IsNullOrEmpty(peripheralName))
+                {
+                    return false;
+                }
+
+                var machineInstance = (IMachine)GCHandle.FromIntPtr(machine).Target;
+                if(!machineInstance.TryGetByName<T>(peripheralName, out peripheral))
+                {
+                    Console.Error.WriteLine($"No peripheral with name {peripheralName}");
+                    return false;
+                }
+                return true;
+            }
         }
     }
 }

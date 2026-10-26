@@ -6,21 +6,63 @@ Library                             OperatingSystem
 
 *** Variables ***
 ${EXTERNAL_CONTROL_DIR}             ${CURDIR}/../../tools/external_control_client
+${CREATE_SNAPSHOT_ON_FAIL}          False
 # This will be overriden by the test setup
 ${BUILD_DIR}                        ${EXTERNAL_CONTROL_DIR}/build
 ${PORT}                             3344
 ${MEMORY_ADDRESS}                   0x1000
 ${SERVER_NAME}                      server
+${SPI_PLATFORM}                     SEPARATOR=${\n}
+...                                 """
+...                                 cpu: CPU.RiscV32 @ sysbus
+...                                 ${SPACE*4}cpuType: "rv32i"
+...
+...                                 mem: Memory.MappedMemory @ sysbus 0x0
+...                                 ${SPACE*4}size: 0x1000
+...
+...                                 spi0: SPI.NRF52840_SPI @ sysbus 0x4000
+...                                 slave0: SPI.ExternalControlSPIPeripheral @ spi0
+...
+...                                 spi1: SPI.NRF52840_SPI @ sysbus 0x5000
+...                                 slave1: SPI.ExternalControlSPIPeripheral @ spi1
+...                                 """
+${SYSBUS_PLATFORM}                  SEPARATOR=${\n}
+...                                 """
+...                                 cpu: CPU.RiscV32 @ sysbus
+...                                 ${SPACE*4}cpuType: "rv32i"
+...
+...                                 mem: Memory.MappedMemory @ sysbus 0x0
+...                                 ${SPACE*4}size: 0x1000
+...
+...                                 memory_bus_peripheral: Bus.ExternalControlBusPeripheral @ sysbus 0x1000
+...                                 ${SPACE*4}size: 0x1000
+...
+...                                 counter_bus_peripheral: Bus.ExternalControlBusPeripheral @ sysbus 0x2000
+...                                 ${SPACE*4}size: 0x1
+...                                 """
+# Simple loop that hits 2 nops 10 times
+# The nops trigger hooks in spi0 and spi1 slaves respectively
+# This way SPI transfers rely on virtual time running
+${PROG_RISCV}                       SEPARATOR=\n
+...                                 addi t0, zero, 0  // i = 0
+...                                 addi t1, zero, 10  // run 10 times
+...                                 loop:
+...                                 nop  // trigger SPI 0 hook
+...                                 nop  // trigger SPI 1 hook
+...                                 addi t0, t0, 1  // i++
+...                                 bne t0, t1, loop  // while != 10
+...                                 done:
+...                                 j done  // spin forever
 
 *** Keywords ***
 Custom Test Setup
-    Test Setup
+    Renode Test Setup
     ${temp}=                        Allocate Temporary Directory  external_control
     Set Global Variable             ${BUILD_DIR}  ${temp}
     Execute Command                 emulation CreateExternalControlServer "${SERVER_NAME}" ${PORT}
 
 Custom Test Teardown
-    Test Teardown
+    Renode Test Teardown
 
     Return From Keyword If          'skipped' in @{TEST TAGS}
 
@@ -34,6 +76,11 @@ Custom Test Teardown
         ${test_name}=                   Get Sanitized Test Name
         ${out_dir}=                     Set Variable  ${RESULTS_DIRECTORY}/external-control/${test_name}
 
+        # This prevents potential fail on copying
+        ${already_exists}=               Run Keyword And Return Status    Directory Should Exist  ${out_dir}
+        IF  ${already_exists} == True
+            Remove Directory                 ${out_dir}  recursive=True
+        END
         Copy Directory                  ${BUILD_DIR}  ${out_dir}
         Log To Console                  !!!!! External control client build directory saved to "${out_dir}"
     ELSE
@@ -43,13 +90,17 @@ Custom Test Teardown
 Build Sample
     [Arguments]                     ${app}
 
+    # `cmake ... -S ${EXTERNAL_CONTROL_DIR} -B ${BUILD_DIR}` isn't used here because it
+    # doesn't work well in all CMake versions and then it fails with such an error:
+    # > The source directory "${EXECDIR} ${EXTERNAL_CONTROL_DIR}" does not exist.
+    Create Directory                ${BUILD_DIR}
     ${r}=                           Run Process  cmake
     ...                             -DAPP_NAME\=${app}
     ...                             -DAPP_SOURCES_DIR\=${EXTERNAL_CONTROL_DIR}/examples/${app}
     ...                             -DAPP_NON_INTERACTIVE\=ON
     ...                             -DRENODE_API_SANITIZERS\=%{RENODE_TESTS_SANITIZERS=ON}
-    ...                             -S ${EXTERNAL_CONTROL_DIR}
-    ...                             -B ${BUILD_DIR}
+    ...                             ${EXTERNAL_CONTROL_DIR}
+    ...                             cwd=${BUILD_DIR}
 
     Should Be Equal As Integers     ${r.rc}  0  msg=cmake failed: ${r.stderr}
 
@@ -58,7 +109,11 @@ Build Sample
 
 Start Sample
     [Arguments]                     ${app}  @{args}
-    ${proc}=                        Start Process  ${BUILD_DIR}/${app}  @{args}
+    # Disable usage of an alternate stack to prevent a bug in ASan described in https://github.com/google/sanitizers/issues/1171
+    # Using a more recent GCC (e.g. version 15.2.0) may also fix the issue
+    &{proc_env}=                    Create Dictionary  ASAN_OPTIONS=use_sigaltstack=0
+
+    ${proc}=                        Start Process  ${BUILD_DIR}/${app}  @{args}  env=${proc_env}
     [Return]                        ${proc}
 
 Wait For Sample Finish
@@ -227,3 +282,198 @@ Should Run Time Elapsed Sample
     Should Contain                  ${r.stdout}  Elapsed virtual time: 0.000000
     Should Contain                  ${r.stdout}  Elapsed virtual time: 0.000100
     Should Contain                  ${r.stdout}  Elapsed virtual time: 0.000200
+
+Should Run Single SPI Sample
+    [Tags]                          exclude_windows
+
+    Create Log Tester               5
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString ${SPI_PLATFORM}
+
+    Execute Command                 cpu AssembleBlock 0x0 """${PROG_RISCV}"""
+    Execute Command                 cpu PC 0x0
+
+    Execute Command                 cpu AddHook 0x8 "self.InfoLog('MISO: ' + str(machine['sysbus.spi0.slave0'].Transmit(10)))"
+
+    Build Sample                    spi
+
+    # The client registers the SPI callback and runs the emulation.
+    ${r}=                           Execute Sample  spi  ${PORT}  machine  client  sysbus.spi0.slave0
+
+    FOR  ${expected}  IN RANGE  10  20
+        Wait For Log Entry              MISO: ${expected}  startEmulation=false
+    END
+
+Should Run Dual SPI Sample
+    [Tags]                          exclude_windows
+
+    Create Log Tester               5
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString ${SPI_PLATFORM}
+
+    Execute Command                 cpu AssembleBlock 0x0 """${PROG_RISCV}"""
+    Execute Command                 cpu PC 0x0
+
+    # spi0 MISO = MOSI + transfer_count
+    Execute Command                 cpu AddHook 0x8 "self.InfoLog('SPI0 MISO: ' + str(machine['sysbus.spi0.slave0'].Transmit(10)))"
+
+    # spi1 MISO = 128 + transfer_count * 2
+    Execute Command                 cpu AddHook 0xc "self.InfoLog('SPI1 MISO: ' + str(machine['sysbus.spi1.slave1'].Transmit(100)))"
+
+    Build Sample                    spi
+
+    # The client registers SPI callbacks and runs the emulation.
+    Execute Sample                  spi  ${PORT}  machine  client  sysbus.spi0.slave0  sysbus.spi1.slave1
+
+    FOR  ${i}  IN RANGE  0  10
+        ${expected_spi0}=               Evaluate  10 + ${i}
+        ${expected_spi1}=               Evaluate  128 + ${i} * 2
+
+        Wait For Log Entry              SPI0 MISO: ${expected_spi0}  startEmulation=false
+        Wait For Log Entry              SPI1 MISO: ${expected_spi1}  startEmulation=false
+    END
+
+Should Run Single SPI Sample With Robot Managed Time
+    [Tags]                          exclude_windows
+
+    Create Log Tester               5
+
+    Execute Command                 logLevel 0 ${SERVER_NAME}
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString ${SPI_PLATFORM}
+
+    Execute Command                 cpu AssembleBlock 0x0 """${PROG_RISCV}"""
+    Execute Command                 cpu PC 0x0
+
+    Execute Command                 cpu AddHook 0x8 "self.InfoLog('MISO: ' + str(machine['sysbus.spi0.slave0'].Transmit(10)))"
+
+    Build Sample                    spi
+
+    # The client registers SPI callbacks and waits.
+    # Robot drives emulation forwards, client handles SPI transfer callbacks.
+    ${proc}=                        Start Sample  spi  ${PORT}  machine  server  sysbus.spi0.slave0
+
+    Wait For Log Entry              Registered SPI callbacks  startEmulation=false
+
+    FOR  ${expected}  IN RANGE  10  20
+        Wait For Log Entry              MISO: ${expected}
+    END
+
+    Terminate Process               ${proc}
+
+Should Run CAN Sample
+    [Tags]                         exclude_windows
+    Set Test Variable              ${sender_id}    0x55
+    Set Test Variable              ${receiver_id}  0xAA
+    Set Test Variable              ${msg_hex}      C001D00D
+
+    Execute Command                mach create "machine"
+    Execute Command                machine LoadPlatformDescriptionFromString "external_client_bus: CAN.CANExternalControlBus @ sysbus"
+    Execute Command                emulation CreateCANHub "canHub"
+    Execute Command                connector Connect external_client_bus canHub
+
+    Create Can Tester              canHub  defaultTimeout=1  defaultStartEmulation=False
+    Create Log Tester              500
+    Execute Command                logLevel -1
+
+    Build Sample                   can
+
+    ${proc}=                       Start Sample  can  ${PORT}  machine  external_client_bus
+    Wait For Log Entry             Registered CAN callback    startEmulation=false
+    
+    Send ISOTP Message             ${sender_id}  ${receiver_id}  ${msg_hex}
+    ${received_msg}=               Wait For Frame With Id         0x55
+    ${received_hex}=               Evaluate  $received_msg.hex().upper()
+    Should Contain                 ${received_hex}  ${msg_hex}
+
+Should Run Bus Peripheral Sample As Executable Memory
+    [Tags]                          exclude_windows
+
+    Create Log Tester               1
+
+    Execute Command                 logLevel 0 ${SERVER_NAME}
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString ${SYSBUS_PLATFORM}
+
+    Build Sample                    bus_peripheral
+
+    # The client registers a system bus peripheral backed by memory.
+    ${proc}=                        Start Sample  bus_peripheral  ${PORT}  machine  sysbus.memory_bus_peripheral  sysbus.counter_bus_peripheral
+
+    Wait For Log Entry              Registered sysbus callbacks  startEmulation=false
+
+    Execute Command                 cpu AssembleBlock 0x1000 """${PROG_RISCV}"""
+    Execute Command                 cpu PC 0x1000
+
+    # Run a simple loop and verify that it got executed multiple times
+    Execute Command                 cpu AddHook 0x1008 "self.InfoLog('executed memory')"
+    Wait For Log Entry              executed memory  pauseEmulation=true
+    Wait For Log Entry              executed memory  pauseEmulation=true
+
+Should Run Bus Peripheral Sample As Counter
+    [Tags]                          exclude_windows
+
+    Create Log Tester               1
+
+    Execute Command                 logLevel 0 ${SERVER_NAME}
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString ${SYSBUS_PLATFORM}
+
+    Build Sample                    bus_peripheral
+
+    # The client registers a system bus peripheral backed by memory.
+    ${proc}=                        Start Sample  bus_peripheral  ${PORT}  machine  sysbus.memory_bus_peripheral  sysbus.counter_bus_peripheral
+
+    # Wait for both callbacks to register
+    Wait For Log Entry              Registered sysbus callbacks  startEmulation=false
+    Wait For Log Entry              Registered sysbus callbacks  startEmulation=false
+
+    # Perform access from global context
+    Execute Command                 sysbus WriteDoubleWord 0x2000 0x5
+    ${value}=                       Execute Command  sysbus ReadDoubleWord 0x2000
+    Should Contain                  ${value}  0x00000005
+    Execute Command                 sysbus WriteDoubleWord 0x2000 0x10000000
+    ${value}=                       Execute Command  sysbus ReadDoubleWord 0x2000
+    Should Contain                  ${value}  0x10000005
+
+    # Verify correct logging on unimplemented callbacks
+    Execute Command                 sysbus WriteByte 0x2000 0x5
+    Wait For Log Entry              does not implement WriteByte callback, ignoring write  startEmulation=false
+    Execute Command                 sysbus ReadQuadWord 0x2000
+    Wait For Log Entry              does not implement ReadQuadWord callback, returning 0  startEmulation=false
+
+Should Run Custom Command Sample
+    [Tags]                        exclude_windows
+    Create Log Tester             1
+    Build Sample                  custom_command
+    Execute Command               logLevel -1 ${SERVER_NAME}
+
+    ${proc}=                      Start Sample  custom_command  ${PORT}
+
+    Wait For Log Entry            Attached CustomCommand callback   startEmulation=False
+
+    ${response} =                 Execute Command      ${SERVER_NAME} SendCustomCommand "demo ping"
+    Should Contain                ${response}  demo pong
+    ${response} =                 Execute Command      ${SERVER_NAME} SendCustomCommand "demo rev part"
+    Should Contain                ${response}  demo rev trap
+    ${response} =                 Run Keyword And Expect Error   *   ${SERVER_NAME} SendCustomCommand "command not defined"
+    Should Contain                ${response}   command not defined
+
+Should Safely Exit
+    [Tags]                          exclude_windows
+
+    Execute Command                 mach create "machine"
+    Execute Command                 machine LoadPlatformDescriptionFromString "gpio: GPIOPort.NPCX_GPIO @ sysbus 0x0"
+    Create Log Tester               5
+
+    # It spams with RunFor if GPIO doesn't change
+    Build Sample                    gpio
+    ${proc}=                        Start Sample  gpio  ${PORT}  machine  gpio  0  event
+
+    Sleep                           2
+    # Renode should properly dispose the Emulation regardless of communication state

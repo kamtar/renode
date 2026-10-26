@@ -254,7 +254,23 @@ namespace Antmicro.Renode.WebSockets.Providers
                 UartCreatedEvent.RaiseEvent(new UartCreatedEventDto
                 {
                     Name = uartName,
-                    Port = webSocketUartAnalyzer.GetUartNumber(),
+                    MachineName = machineName
+                });
+            }
+
+            var webSocketVideoAnalyzer = backendAnalyzer as WebSocketVideoAnalyzer;
+            if(webSocketVideoAnalyzer != null)
+            {
+                var video = webSocketVideoAnalyzer.Video;
+                var machine = video.GetMachine();
+
+                var machineName = EmulationManager.Instance.CurrentEmulation[machine];
+                string displayName = machine.GetAnyNameOrTypeName(video);
+
+                DisplayCreatedEvent.RaiseEvent(new DisplayCreatedEventDto
+                {
+                    Name = displayName,
+                    Port = webSocketVideoAnalyzer.GetDisplayNumber(),
                     MachineName = machineName
                 });
             }
@@ -308,6 +324,9 @@ namespace Antmicro.Renode.WebSockets.Providers
         [WebSocketAPIEvent("uart-opened", "1.5.0")]
         private readonly WebSocketAPIEventHandler UartCreatedEvent;
 
+        [WebSocketAPIEvent("display-opened", "1.6.0")]
+        private readonly WebSocketAPIEventHandler DisplayCreatedEvent;
+
         [WebSocketAPIEvent("led-state-changed", "1.5.0")]
         private readonly WebSocketAPIEventHandler LedStateChangedEvent;
 
@@ -334,6 +353,14 @@ namespace Antmicro.Renode.WebSockets.Providers
         }
 
         private class UartCreatedEventDto
+        {
+            [JsonProperty("name")]
+            public string Name;
+            [JsonProperty("machineName")]
+            public string MachineName;
+        }
+
+        private class DisplayCreatedEventDto
         {
             [JsonProperty("port")]
             public int Port;

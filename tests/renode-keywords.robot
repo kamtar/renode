@@ -26,7 +26,7 @@ ${CREATE_EXECUTION_METRICS}  False
 ${PROFILER_PROCESS}          None
 
 *** Keywords ***
-Setup
+Renode Suite Setup
     ${SYSTEM}=          Evaluate    platform.system()    modules=platform
 
     ${CONFIGURATION}=  Set Variable If  not ${SKIP_RUNNING_SERVER} and ${SERVER_REMOTE_DEBUG}
@@ -62,12 +62,13 @@ Setup
 
     Setup Renode
 
+Setup
+    [Documentation]     *DEPRECATED*
+    ...                 Use 'Renode Suite Setup'.
+    Renode Suite Setup
+
 Setup Renode
     Set Default Uart Timeout  ${DEFAULT_UART_TIMEOUT}
-
-    IF  ${SAVE_LOGS}
-        Enable Logging To Cache
-    END
 
     ${allowed_chars}=   Set Variable                 abcdefghijklmnopqrstuvwxyz01234567890_-
     ${metrics_fname}=   Convert To Lower Case        ${SUITE_NAME}
@@ -81,7 +82,7 @@ Setup Renode
 
     Reset Emulation
 
-Teardown
+Renode Suite Teardown
     IF  not ${SKIP_RUNNING_SERVER}
         Stop Remote Server
     END
@@ -89,6 +90,11 @@ Teardown
     IF  not ${SKIP_RUNNING_SERVER}
         Wait For Process
     END
+
+Teardown
+    [Documentation]     *DEPRECATED*
+    ...                 Use 'Renode Suite Teardown'.
+    Renode Suite Teardown
 
 Sanitize Test Name
     [Arguments]        ${test_name}
@@ -115,24 +121,47 @@ Create Snapshot Of Failed Test
     Execute Command  Save ${snapshot_path}
     Log To Console   !!!!! Emulation's state saved to ${snapshot_path}
 
-Save Test Log
-    Return From Keyword If   'skipped' in @{TEST TAGS}
-
+Get Test Log Path
     ${test_name}=      Get Sanitized Test Name
 
     ${logs_dir}=       Set Variable  ${RESULTS_DIRECTORY}/logs
     Create Directory   ${logs_dir}
 
-    ${log_path}=       Set Variable  ${logs_dir}/${test_name}.log
-    Log To Console     !!!!! Log saved to "${log_path}"
-    Save Cached Log    ${log_path}
+    RETURN             ${logs_dir}/${test_name}.log
 
-Test Setup
+Renode Test Setup
     IF  'profiling' in @{TEST TAGS}
         Start Profiler
     END
 
-Test Teardown
+    IF  ${SAVE_LOGS}
+        ${log_path}=  Get Test Log Path
+        Open Log File  ${log_path}
+    END
+
+    Reset Emulation
+    Set Crash On Abort  True
+
+Test Setup
+    [Documentation]     *DEPRECATED*
+    ...                 Use 'Renode Test Setup'.
+    Renode Test Setup
+
+Print Log Saved Message
+    Return From Keyword If   'skipped' in @{TEST TAGS}
+    Return From Keyword If    not ${SAVE_LOGS}
+
+    ${log_path}=  Get Test Log Path
+    Log To Console     !!!!! Log saved to "${log_path}"
+
+Remove Log
+    Return From Keyword If   'skipped' in @{TEST TAGS}
+    Return From Keyword If    not ${SAVE_LOGS}
+
+    ${log_path}=  Get Test Log Path
+    Remove File  ${log_path}
+
+Renode Test Teardown
     Stop Profiler
 
     ${failed}=  Run Keyword If Test Failed  Set Variable  True
@@ -150,13 +179,11 @@ Test Teardown
           ...   Create Snapshot Of Failed Test
     END
 
-    IF  ${SAVE_LOGS}
-        IF  "${SAVE_LOGS_WHEN}" == "Always"
-            Save Test Log
-        ELSE IF  "${SAVE_LOGS_WHEN}" == "Fail"
-            Run Keyword If Test Failed
-              ...   Save Test Log
-        END
+    Close Log File
+    IF  "${SAVE_LOGS_WHEN}" == "Always" or ${failed}
+        Print Log Saved Message
+    ELSE
+        Remove Log
     END
 
     IF  ${HOLD_ON_ERROR}
@@ -172,7 +199,11 @@ Test Teardown
     END
 
     Reset Emulation
-    Clear Cached Log
+
+Test Teardown
+    [Documentation]     *DEPRECATED*
+    ...                 Use 'Renode Test Teardown'.
+    Renode Test Teardown
 
 Hot Spot
     Handle Hot Spot  ${HOTSPOT_ACTION}
@@ -199,11 +230,11 @@ Stop Profiler
 
 Dump Registers Range
     [Tags]  robot:private
-    [Arguments]     ${Device}   ${End}  ${Start}=0
+    [Arguments]     ${Device}   ${End}  ${Start}=0  ${Machine}=
     ${Dump}=        Create Dictionary
 
     FOR     ${index}    IN RANGE    ${Start}    ${End}+1    4
-        ${RegValue}=    Execute Command     ${Device} ReadDoubleWord ${index}
+        ${RegValue}=    Execute Command     ${Device} ReadDoubleWord ${index}   ${Machine}
         ${RegValue}=    Remove String   ${RegValue}     \n   # Remove newlines to make diff output more readable
         Set To Dictionary   ${Dump}     ${index}    ${RegValue}
     END
@@ -223,14 +254,17 @@ Dump Devices Registers
     ...
     ...                 Please not the usage of inline python evaluation ``${{}}`` to keep tuples
     ...                 instead of having strings.
-    [Arguments]     ${DevicesAndRanges}
+    [Arguments]     ${DevicesAndRanges}     ${Machine}=
     ${Dump}=        Create Dictionary
 
     FOR     ${Device}   ${Ranges}    IN  &{DevicesAndRanges}
+        # Init to empty dictionary to simplify the dictionary merge with Create Dictionary
+        Set To Dictionary   ${Dump}     ${Device}=${{ {} }}
         FOR     ${Range}    IN  @{Ranges}
-            ${RegsDump}=    Dump Registers Range  ${Device}    ${Range}[1]    ${Range}[0]
-            Set To Dictionary   ${Dump}     ${Device}=${RegsDump}
-            Log Dictionary  ${Dump}
+            ${RegsDump}=    Dump Registers Range    ${Device}    ${Range}[1]
+            ...                                     ${Range}[0]  ${Machine}
+            ${AllRangesDump}=   Create Dictionary   &{Dump}[${Device}]  &{RegsDump}
+            Set To Dictionary   ${Dump}     ${Device}=${AllRangesDump}
         END
     END
     RETURN  ${Dump}
@@ -242,20 +276,17 @@ Devices Registers Dump Should Be Equal
     ${DevicesA}=    Get Dictionary Keys     ${DumpA}
     ${DevicesB}=    Get Dictionary Keys     ${DumpB}
 
-    TRY
-        Dictionaries Should Be Equal    ${DumpA}    ${DumpB}
-    EXCEPT
-        # On error, printing the whole device:'registers_dump' dictionary entry is hard to read. So
-        # instead, let's compare device by device to print the first
-        FOR     ${device}   IN  @{DevicesA}
-            ${DeviceDumpA}=     Get From Dictionary     dictionary=${DumpA}     key=${device}
-            ${DeviceDumpB}=     Get From Dictionary     dictionary=${DumpB}     key=${device}
-            TRY
-                Dictionaries Should Be Equal    ${DeviceDumpA}     ${DeviceDumpB}
-            EXCEPT
-                CONTINUE
-            END
-        END
-        FAIL    ${NameDumpA} and ${NameDumpB} dumps differ, see logs of previous for loop for
-        ...     more details on which entries are different.
+    # Let's compare list of devices and then device by device to have more readable error messages
+    # than the big dump when directly comparing DumpA to DumpB.
+    Lists Should Be Equal   ${DevicesA}     ${DevicesB}
+    ...                     msg=Not the same dumped devices for ${NameDumpA} and ${NameDumpB}
+
+    FOR     ${device}   IN  @{DevicesA}
+        ${DeviceDumpA}=     Get From Dictionary     dictionary=${DumpA}     key=${device}
+        ${DeviceDumpB}=     Get From Dictionary     dictionary=${DumpB}     key=${device}
+
+        # Continue on failure to dump all errors. It does not prevent the keyword to fail.
+        Run Keyword And Continue On Failure     Dictionaries Should Be Equal
+        ...                                     ${DeviceDumpA}     ${DeviceDumpB}
+        ...                                     msg=Device ${device} (${NameDumpA} vs ${NameDumpB})
     END

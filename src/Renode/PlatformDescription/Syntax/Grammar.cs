@@ -409,7 +409,7 @@ namespace Antmicro.Renode.PlatformDescription.Syntax
              select new IrqAttribute(sources, new[] { destination }.Concat(rest)));
 
         public static readonly Parser<IrqAttribute> NoneIrqAttribute =
-            (from source in GetIrqEnd(true).Select(x => new[] { x }).Optional()
+            (from source in (GetIrqEnd(true).Select(x => new[] { x }).Or(GetIrqEnds(true))).Optional()
              from arrow in RightArrow
              from noneKeyword in NoneKeyword
              select new IrqAttribute(source.GetOrDefault(), new[] { new IrqDestinations(null, null) }));

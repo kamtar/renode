@@ -7,7 +7,6 @@ export const RenodeQuitted = 'renode-quitted';
 export const ClearCommand = 'clear-command';
 
 export interface UartOpenedArgs {
-  port: number;
   name: string;
   machineName: string;
 }
@@ -30,3 +29,11 @@ export interface ButtonStateChangedArgs {
 export type ButtonStateChangedCallback = (
   event: ButtonStateChangedArgs,
 ) => void;
+
+export const DisplayOpened = 'display-opened';
+export interface DisplayOpenedArgs {
+  port: number;
+  name: string;
+  machineName: string;
+}
+export type DisplayOpenedCallback = (event: DisplayOpenedArgs) => void;

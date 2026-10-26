@@ -46,23 +46,6 @@ Battery LED Toggling From Engine Key
     Execute Command             adc1.engineKey CurrentState "left"
     Assert And Hold Led State   false   timeoutAssert=1     timeoutHold=${LEDHoldingTimeout}
 
-Trigger Watchdog Reset
-    Create Log Tester       timeout=10  defaultPauseEmulation=true
-
-    Execute Command         iwdg WriteDoubleWord 0x0 0x5555
-    Execute Command         iwdg WriteDoubleWord 0x8 0x1
-    Execute Command         iwdg WriteDoubleWord 0x0 0xCCCC
-    Wait For Log Entry      Watchdog reset triggered!
-
-    # The machine reset does not occur right after the watchdog requested it. Let's simulate it to
-    # ensure it occurred when returning from this function. Furthermore, waiting for a reset log
-    # (non existent right now) would not work because the machine would be briefly resumed between
-    # the reset and the log tester founding the string because Machine.Reset released an obtained
-    # paused state.
-    #
-    # If the caller restarts the simulation, the reset from the watchdog might happen.
-    Execute Command         machine Reset
-
 Restore Started Platform
     Requires                 post-startup
     Create CAN Tester        canHub  1
@@ -99,6 +82,17 @@ Grant Security Access To ECU
     ${resp_hex}=             Wait For ISOTP Message Hex    ${send_id}  ${recv_id}  timeout=1
     Should Start With        ${resp_hex}  6702
 
+Prepare RAMN With Frame Buffer Tester
+    [Arguments]             ${fb_tester_name}
+
+    Execute Command         include @scripts/multi-node/ramn.resc
+    Execute Command         mach set "ECUA"
+    # As RAMN firmware is randomly choosing a theme, the seed must be set to have reproducible tests
+    Execute Command         emulation SetSeed 0
+    Execute Command         emulation CreateFrameBufferTester "${fb_tester_name}" 10
+    Execute Command         ${fb_tester_name} AttachTo sysbus.spi2.screen
+
+
 *** Test Cases ***
 Should Produce CAN Traffic
     [Documentation]          Test data path ECU{B,C,D}'s CAN controller -> CAN hub
@@ -126,7 +120,7 @@ Engine Key Should Affect Battery LED After Reset
 
     # Wait 5 seconds to ensure the system is fully started before resetting it
     Execute Command         emulation RunFor "5s"
-    Trigger Watchdog Reset
+    Execute Command         machine Reset   machine=ECUD
     Battery LED Toggling From Engine Key   2    batteryWarning
 
 Brake Should Affect Brake LED
@@ -147,31 +141,14 @@ Brake Should Affect Brake LED
     Execute Command             adc1.brake SetPercentage 50      machine=ECUC
     Assert And Hold Led State   true    timeoutAssert=1     timeoutHold=${LEDHoldingTimeout}
 
-Should Init Screen on ECUA
-    [Documentation]         Test on ECUA that the data path Memory -> DMA -> SPI TX is working
-
-    # Commands and data bytes sent by RAMN_SPI_InitScreen
-    ${RAMN_SPI_InitScreen_bytes}    Set Variable  0x1  0x11  0x21  0x36  0x0  0x3A  0x55  0x2A  0x0
-    ...                                           0xF0  0x0  0x0  0x2B  0x0  0xF0  0x0  0x0  0x13
-    ...                                           0x29  0xB0  0x0  0xF8  0x33  0x0  0x20  0x1  0x20
-    ...                                           0x0  0x0  0x37  0x0  0x20  0x2C
-
-    Execute Command         include @scripts/multi-node/ramn.resc
-    Execute Command         mach set "ECUA"
-    Create Log Tester       timeout=5   defaultPauseEmulation=True
-    Execute Command         logLevel 0 spi2.dummySpi
-
-    FOR     ${byte}     IN  @{RAMN_SPI_InitScreen_bytes}
-        Wait For Log Entry  spi2.dummySpi: Data received: ${byte}
-    END
-
-Registers Should Reset On Watchdog Reset
+Registers Should Reset On Machines Reset
     [Documentation]         Test that models Reset() properly reset registers
 
     # The list of used devices is from capturing all peripheral accesses when running RAMN firmware.
     ${Registers} =          Create Dictionary   adc1=${{ [(0x0, 0xC4), (0x308, 0x308)] }}
+    ...                                         dma1=${{ [(0x0,0xA4)] }}
     ...                                         dma2=${{ [(0x0,0xA4)] }}
-    ...                                         dmamux=${{ [(0x0,0x0), (0x80, 0x84), (0x100, 0x144)] }}
+    ...                                         dmamux=${{ [(0x0,0x3c), (0x80, 0x84), (0x100, 0x144)] }}
     ...                                         fdcan1=${{ [(0x0,0x100)] }}
     ...                                         gpioPortB=${{ [(0x0,0x28)] }}
     ...                                         rng=${{ [(0x0,0x10)] }}
@@ -179,13 +156,37 @@ Registers Should Reset On Watchdog Reset
     ...                                         iwdg=${{ [(0x0,0x10)] }}
     ...                                         nvic=${{ [(0x0, 0x1C), (0x100, 0x400), (0xD00, 0xFA8)] }}
     ...                                         timer1=${{ [(0x0, 0x50)] }}
+    ${MachinesAtBoot} =     Create Dictionary
 
     Execute Command         include @scripts/multi-node/ramn.resc
-    &{Boot} =               Dump Devices Registers    ${Registers}
-    Execute Command         emulation RunFor "3s"
-    Trigger Watchdog Reset
-    &{Reset} =              Dump Devices Registers    ${Registers}
-    Devices Registers Dump Should Be Equal  ${Boot}     ${Reset}    "Boot"  "Reset"
+    FOR  ${ECU}  IN  ECUA  ECUB  ECUC  ECUD
+        &{Boot} =               Dump Devices Registers    ${Registers}  Machine=${ECU}
+        Set To Dictionary   ${MachinesAtBoot}   ${ECU}=${Boot}
+    END
+
+    Execute Command         emulation RunFor "5s"
+
+    FOR  ${ECU}  IN  ECUA  ECUB  ECUC  ECUD
+        # fdcan1 is disconnected from can hub before reset so that no "in-transit" messages
+        # modify its state after reset. The registers need to be exactly like at reset.
+        Execute Command         connector Disconnect sysbus.fdcan1 canHub   machine=${ECU}
+        Execute Command         machine Reset                               machine=${ECU}
+
+        &{Reset} =              Dump Devices Registers    ${Registers}  Machine=${ECU}
+        Devices Registers Dump Should Be Equal  ${MachinesAtBoot}[${ECU}]   ${Reset}
+        ...                                     "Boot ${ECU}"   "Reset ${ECU}"
+    END
+
+Should Trigger Watchdog On Firmware Blocked
+    Execute Command         include @scripts/multi-node/ramn.resc
+    Create Log Tester       timeout=${MIN_ACCEPTABLE_RUNTIME_SECONDS}
+    Execute Command         emulation RunFor "1s"
+
+    FOR  ${ECU}  IN  ECUA  ECUB  ECUC  ECUD
+        # Disable systick and systick interrupt to block the firmware
+        Execute Command         nvic WriteDoubleWord 0x10 0x4   machine=${ECU}
+        Wait For Log Entry      Watchdog reset triggered!       machine=${ECU}
+    END
 
 Should Run Without Watchdog Being Triggered
     Execute Command         include @scripts/multi-node/ramn.resc
@@ -359,3 +360,28 @@ ECUA Should Execute Shellcode Via Routine Control UDS Command
     Send ISOTP Message       ${send_id}  ${recv_id}  23142000000004
     ${mem_hex}=  Wait For ISOTP Message Hex    ${send_id}  ${recv_id}  timeout=1
     Should Be Equal          ${mem_hex}  63EFBEADDE
+
+ECUA Should Display Boot Menu
+    [Documentation]         Test on ECUA that command and data path Memory -> DMA -> SPI TX -> ST7789 are working
+
+    Prepare RAMN With Frame Buffer Tester   fb_tester
+    Execute Command         fb_tester WaitForFrame @https://dl.antmicro.com/projects/renode/ramn-boot-menu.png-s_2047-1b05b683c24ebaf1a17d05eae4c675be82ca78ea
+
+ECUA Should Display Actuators Changes
+    [Documentation]         Test that ECU{C,B,D} communicate to ECUA over CAN and that new actuator values are reflected on screen
+
+    Prepare RAMN With Frame Buffer Tester   fb_tester
+
+    # Arbitrary sequence of commands executed before saving the reference frame
+    Execute Command         mach set "ECUD"
+    Execute Command         adc1.engineKey CurrentState "middle"
+    Execute Command         mach set "ECUB"
+    Execute Command         adc1.parkingBrake CurrentState "on"
+    Execute Command         adc1.wheel Percentage 50
+    Execute Command         adc1.lightingSwitch CurrentState "pos4"
+    Execute Command         mach set "ECUC"
+    Execute Command         adc1.brake Percentage 33
+    Execute Command         adc1.accel Percentage 100
+    Execute Command         adc1.joystick CurrentState "left"
+
+    Execute Command         fb_tester WaitForFrame @https://dl.antmicro.com/projects/renode/ramn-screen-uds.png-s_2782-db02d08076711bb4f1722f5b3b9f87836e98fa0e

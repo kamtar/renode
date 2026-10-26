@@ -17,9 +17,8 @@ namespace Antmicro.Renode.NativeInterface
         [UnmanagedCallersOnly(EntryPoint = "renode_systemc_send_backward_request")]
         [DNNE.C99DeclCode("""
 /*
-_RENODE_BRIDGE_H should be defined manually
-after including renode_bridge.h
-and before including librenode.h
+renode_bridge.h should be included
+before including librenode.h
 to replace the stub below with the actual type.
 See renode_bridge.cpp for an example.
 We do not guarantee type safety,
@@ -61,85 +60,23 @@ struct renode_message {
             }
         }
 
-        [UnmanagedCallersOnly(EntryPoint = "renode_systemc_send_forward_response")]
-        [return: DNNE.C99Type("RenodeStatus")]
-        public static NativeStatus SystemCSendForwardResponse(
-            [DNNE.C99Type("struct renode_message")] RenodeMessage message,
-            [DNNE.C99Type("const char *")] byte* machName,
-            [DNNE.C99Type("const char *")] byte* periName
-        )
-        {
-            if(!TryGetSystemCHandle(machName, periName, out var systemC))
-            {
-                return NativeStatus.CommandError;
-            }
-
-            try
-            {
-                systemC.HandleForwardResponseFromNative(message);
-                return NativeStatus.Success;
-            }
-            catch(Exception ex)
-            {
-                Console.Error.WriteLine($"Exception: {ex}");
-                return NativeStatus.Exception;
-            }
-        }
-
-        [UnmanagedCallersOnly(EntryPoint = "renode_systemc_send_forward_response_dmi")]
-        [DNNE.C99DeclCode("""
-/*
-_RENODE_BRIDGE_H should be defined manually
-after including renode_bridge.h
-and before including librenode.h
-to replace the stub below with the actual type.
-See renode_bridge.cpp for an example.
-*/
-#ifndef _RENODE_BRIDGE_H
-struct dmi_native_message {
-  uint8_t action;
-  uint8_t dmi_access;
-  uint64_t start_address;
-  uint64_t end_address;
-  uint64_t pointer;
-};
-#endif // _RENODE_BRIDGE_H
-""")]
-        [return: DNNE.C99Type("RenodeStatus")]
-        public static NativeStatus SystemCSendForwardResponseDmi(
-            [DNNE.C99Type("struct dmi_native_message")] DMINativeMessage message,
-            [DNNE.C99Type("const char *")] byte* machName,
-            [DNNE.C99Type("const char *")] byte* periName
-        )
-        {
-            if(!TryGetSystemCHandle(machName, periName, out var systemC))
-            {
-                return NativeStatus.CommandError;
-            }
-
-            try
-            {
-                systemC.HandleForwardResponseDmiFromNative(message);
-                return NativeStatus.Success;
-            }
-            catch(Exception ex)
-            {
-                Console.Error.WriteLine($"Exception: {ex}");
-                return NativeStatus.Exception;
-            }
-        }
-
         [UnmanagedCallersOnly(EntryPoint = "renode_systemc_setup_connection")]
         [return: DNNE.C99Type("RenodeStatus")]
         public static NativeStatus SystemCSetupConnection(
             [DNNE.C99Type("void*")] void* renodeConnectionRef,
             [DNNE.C99Type("void*")] delegate* unmanaged<void*, RenodeMessage, void> bwResponseHandler,
             [DNNE.C99Type("void*")] delegate* unmanaged<void*, DMIMessage, void> bwResponseDmiHandler,
-            [DNNE.C99Type("void*")] delegate* unmanaged<void*, RenodeMessage, void> fwRequestHandler,
+            [DNNE.C99Type("void*")] delegate* unmanaged<void*, RenodeMessage, RenodeMessage*, DMINativeMessage*, int> fwRequestHandler,
+            [DNNE.C99Type("uint32_t *")] uint* spinWaitIterations,
             [DNNE.C99Type("const char *")] byte* machName,
             [DNNE.C99Type("const char *")] byte* periName
         )
         {
+            if(spinWaitIterations == null)
+            {
+                return NativeStatus.CommandError;
+            }
+
             if(!TryGetSystemCHandle(machName, periName, out var systemC))
             {
                 return NativeStatus.CommandError;
@@ -155,6 +92,7 @@ struct dmi_native_message {
             systemC.SendBackwardResponseNative = bwResponseHandler;
             systemC.SendBackwardResponseDmiNative = bwResponseDmiHandler;
             systemC.SendForwardRequestNative = fwRequestHandler;
+            *spinWaitIterations = systemC.SpinWaitIterations;
 
             return NativeStatus.Success;
         }
@@ -241,36 +179,11 @@ struct dmi_native_message {
         private static bool TryGetSystemCHandle(byte* machName, byte* periName, out ISystemCNativeConnection systemC)
         {
             systemC = null;
-
-            var machineName = Marshal.PtrToStringUTF8((IntPtr)machName);
-            var peripheralName = Marshal.PtrToStringUTF8((IntPtr)periName);
-
-            if(string.IsNullOrEmpty(machineName) || string.IsNullOrEmpty(peripheralName))
+            if(!Generics.TryGetPeripheral<SystemCPeripheral>(machName, periName, out var p))
             {
                 return false;
             }
-
-            if(EmulationManager.Instance == null)
-            {
-                Console.Error.WriteLine("Emulation Manager instance is not initialized");
-                return false;
-            }
-
-            var e = EmulationManager.Instance.CurrentEmulation;
-
-            if(!e.TryGetMachineByName(machineName, out var m))
-            {
-                Console.Error.WriteLine($"No machine with name {machineName}");
-                return false;
-            }
-
-            if(!m.TryGetByName<SystemCPeripheral>(peripheralName, out var p))
-            {
-                Console.Error.WriteLine($"No peripheral with name {peripheralName}");
-                return false;
-            }
-
-            systemC = p;
+            systemC = (ISystemCNativeConnection)p;
 
             return true;
         }

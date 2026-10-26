@@ -7,6 +7,9 @@ nvic: IRQControllers.NVIC @ sysbus 0xE000E000
     priorityMask: 0xF0
     -> cpu@0
 
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 250000000
+
 exti: IRQControllers.STM32H7_EXTI @ sysbus 0x58000000
     [0-4] -> nvic@[6-10]
     [5-9] -> nvicInput23@[0-4]
@@ -509,6 +512,7 @@ itcm: Memory.MappedMemory @ sysbus 0x00000000
 
 rcc: Miscellaneous.STM32H7_RCC @ sysbus 0x58024400
     systick: nvic
+    dwt: dwt
 
 crc: CRC.STM32_CRC @ {
         sysbus 0x58024C00;
@@ -733,7 +737,8 @@ elif request.Offset == 0x04: # CSR1
    # Reset value + ACTVOSRDY (b13) indicates the voltage level is valid
    request.Value = 0x6000
 elif request.Offset == 0x0C: # CR3
-    request.Value = 0
+    # USB33RDY flag (b26) indicates the USB supply is ready
+    request.Value = 0x4000000
 elif request.Offset == 0x18: # D3CR
     # VOSRDY flag (b13) indicates the voltage was properly set.
     request.Value = 0x2000
@@ -758,6 +763,12 @@ if request.Offset in (
 else:
     self.WarningLog("Unhandled access to offset 0x{0:X}", request.Offset)
 '''
+
+usb1: USB.DesignWare_USB_OTG @ sysbus 0x40040000
+    IRQ -> nvic@77
+
+usb2: USB.DesignWare_USB_OTG @ sysbus 0x40080000
+    IRQ -> nvic@101
 
 sysbus:
     init:
@@ -789,6 +800,7 @@ sysbus:
         Tag <0x40015000, 0x400153FF> "SPI5"
         Tag <0x40013000, 0x400133FF> "SPI1_/_I2S1"
         Tag <0x4000A800, 0x4000ABFF> "CAN_CCU"
+        Tag <0x4000A804, 0x4000A807> "CCFG" 0x4 silent=True
         Tag <0x40009400, 0x400097FF> "MDIOS"
         Tag <0x40009000, 0x400093FF> "OPAMP"
         Tag <0x40008800, 0x40008BFF> "SWPMI"

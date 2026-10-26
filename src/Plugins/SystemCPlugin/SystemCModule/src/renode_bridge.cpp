@@ -9,13 +9,11 @@
 #ifdef RENODE_NATIVE_INTERFACE
 // librenode.h should be included after renode_bridge.h
 // to have renode_message struct already defined.
-#define _RENODE_BRIDGE_H
 #include "librenode.h"
 #endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
 #include <thread>
 #include <cinttypes>
 #include <array>
@@ -206,9 +204,11 @@ static void handle_backward_response_dmi_native(void* opaque_ptr, dmi_message me
   conn->handle_backward_response_dmi_from_native(message);
 }
 
-static void handle_forward_request_native(void* opaque_ptr, renode_message message) {
+static int32_t handle_forward_request_native(void* opaque_ptr, renode_message message,
+                                             renode_message *response,
+                                             dmi_native_message *dmi_response) {
   renode_connection *conn = (renode_connection *)opaque_ptr;
-  conn->handle_forward_request_from_native(message);
+  return conn->handle_forward_request_from_native(message, response, dmi_response) ? 1 : 0;
 }
 
 renode_message renode_bridge::receive_backward_response() {
@@ -281,6 +281,8 @@ renode_bridge::renode_bridge(sc_core::sc_module_name name, const char *address,
   sensitive << init_vtor_ns_in;
   SC_METHOD(on_init_s_vtor);
   sensitive << init_vtor_s_in;
+  SC_METHOD(on_set_clock_period);
+  sensitive << clock_period_in;
 
   bus_target_fw_handler.initialize(this, 0);
   cpu_target_fw_handler.initialize(this, 0);
@@ -313,6 +315,7 @@ void renode_bridge::register_connection(renode_connection *conn) {
 void renode_bridge::handle_forward_request(renode_message &message) {
   // Processing of requests initiated by Renode.
   uint8_t data[8] = {0};
+  bool transaction_requires_delta_cycle = false;
 
   // Choose the appropriate initiator socket to initiate the transaction with.
   renode_bus_initiator_socket *initiator_socket = nullptr;
@@ -339,18 +342,23 @@ void renode_bridge::handle_forward_request(renode_message &message) {
   } break;
   case renode_action::WRITE: {
     handle_write(*initiator_socket, message, data);
+    transaction_requires_delta_cycle = true;
   } break;
   case renode_action::READ: {
     handle_read(*initiator_socket, message, data);
+    transaction_requires_delta_cycle = true;
   } break;
   case renode_action::WRITE_REGISTER: {
     handle_write(register_initiator_socket, message, data);
+    transaction_requires_delta_cycle = true;
   } break;
   case renode_action::READ_REGISTER: {
     handle_read(register_initiator_socket, message, data);
+    transaction_requires_delta_cycle = true;
   } break;
   case renode_action::DMIREQ: {
     handle_get_direct_mem_ptr(*initiator_socket, message);
+    transaction_requires_delta_cycle = true;
   } break;
   case renode_action::GPIOWRITE: {
     auto number = message.address;
@@ -371,6 +379,10 @@ void renode_bridge::handle_forward_request(renode_message &message) {
   default:
     fprintf(stderr, "Malformed message received from Renode - terminating simulation.\n");
     terminate_simulation(1);
+  }
+
+  if(transaction_requires_delta_cycle) {
+    wait(sc_core::SC_ZERO_TIME);
   }
 }
 
@@ -414,7 +426,6 @@ void renode_bridge::handle_read(renode_bus_initiator_socket &socket, renode_mess
   message.payload = *((uint64_t *)data);
   message.connection_index = (uint8_t)payload->is_dmi_allowed();
   send_forward_response(&message);
-  wait(sc_core::SC_ZERO_TIME);
 }
 
 void renode_bridge::handle_write(renode_bus_initiator_socket &socket, renode_message &message, uint8_t data[8]) {
@@ -434,8 +445,6 @@ void renode_bridge::handle_write(renode_bus_initiator_socket &socket, renode_mes
   message.address = delay;
   message.connection_index = (uint8_t)payload->is_dmi_allowed();
   send_forward_response(&message);
-
-  wait(sc_core::SC_ZERO_TIME);
 }
 
 void renode_bridge::handle_get_direct_mem_ptr(renode_bus_initiator_socket &socket, renode_message &message) {
@@ -463,7 +472,6 @@ void renode_bridge::handle_get_direct_mem_ptr(renode_bus_initiator_socket &socke
   dmi_message.pointer = reinterpret_cast<uintptr_t>(dmi_data.get_dmi_ptr());
 
   send_forward_response_dmi(&dmi_message);
-  wait(sc_core::SC_ZERO_TIME);
 }
 
 void renode_bridge::handle_debug_access(renode_message &message)
@@ -572,6 +580,23 @@ void renode_bridge::on_init_s_vtor() {
 
 void renode_bridge::on_init_ns_vtor() {
   init_vtor(INIT_NON_SECURE_VTOR, init_vtor_ns_in);
+}
+
+void renode_bridge::on_set_clock_period() {
+  if (clock_period_in.get_interface() == nullptr) {
+    return;
+  }
+
+  double period = clock_period_in->read().to_seconds();
+  uint64_t freq = (period == 0.0) ? 0 : static_cast<uint64_t>(1.0 / period);
+
+  renode_message msg = {};
+  msg.action = renode_action::SET_CLOCK_FREQUENCY;
+  msg.address = freq;
+  msg.initiator_id = id;
+  send_backward_request(&msg);
+  // Response is ignored.
+  msg = receive_backward_response();
 }
 
 // ================================================================================
@@ -723,9 +748,35 @@ void renode_connection::handle_backward_response_dmi_from_native(dmi_message mes
   dmi_response.add(message);
 }
 
-void renode_connection::handle_forward_request_from_native(renode_message message)
+bool renode_connection::handle_forward_request_from_native(renode_message message, renode_message *response,
+                                                           dmi_native_message *dmi_response)
 {
-  fw_request.add(message);
+  if(!native) {
+    return false;
+  }
+
+  bool expects_dmi_response = message.action == renode_action::DMIREQ;
+  bool valid_response_storage = expects_dmi_response ? response == nullptr && dmi_response != nullptr
+                                                     : response != nullptr && dmi_response == nullptr;
+  if(!valid_response_storage) {
+    return false;
+  }
+
+  native_response = response;
+  native_dmi_response = dmi_response;
+  native_response_event.reset();
+
+  // Renode holds messageLock for the entire transaction. The mailbox events
+  // publish the request/response storage between the two OS threads.
+  // Publish the request to forward_loop, which executes b_transport in its
+  // SC_THREAD.
+  native_request = message;
+  native_request_event.signal();
+  while(!native_response_event.wait(spin_wait_iterations)) {}
+
+  native_response = nullptr;
+  native_dmi_response = nullptr;
+  return true;
 }
 
 renode_message renode_connection::receive_backward_response()
@@ -754,7 +805,12 @@ renode_message renode_connection::receive_forward_request(bool* closed)
 {
   if(native) {
     *closed = false;
-    return fw_request.take();
+    while(!native_request_event.wait(spin_wait_iterations)) {
+      sc_core::wait(sc_core::SC_ZERO_TIME);
+    }
+    auto message = native_request;
+    native_request_event.reset();
+    return message;
   } else {
     renode_message message;
     int nread =
@@ -777,7 +833,8 @@ void renode_connection::send_backward_request(renode_message *message) {
 void renode_connection::send_forward_response(renode_message *message) {
   if (native) {
 #ifdef RENODE_NATIVE_INTERFACE
-    renode_systemc_send_forward_response(*message, mach.c_str(), peri.c_str());
+    *native_response = *message;
+    native_response_event.signal();
 #endif
   } else {
     forward_connection->Send((char *)message, sizeof(renode_message));
@@ -787,7 +844,8 @@ void renode_connection::send_forward_response(renode_message *message) {
 void renode_connection::send_forward_response_dmi(dmi_native_message *message) {
   if (native) {
 #ifdef RENODE_NATIVE_INTERFACE
-    renode_systemc_send_forward_response_dmi(*message, mach.c_str(), peri.c_str());
+    *native_dmi_response = *message;
+    native_response_event.signal();
 #endif
   } else {
     forward_connection->Send((char *)message, sizeof(dmi_native_message));
@@ -798,7 +856,8 @@ renode_connection::renode_connection(sc_core::sc_module_name name,
                                      const char *address, const char *port,
                                      bool native, std::string mach,
                                      std::string peri, bool hosted)
-    : sc_module(name), native(native), mach(mach), peri(peri) {
+    : sc_module(name), native(native), spin_wait_iterations(0), mach(mach), peri(peri),
+      native_response(nullptr), native_dmi_response(nullptr) {
   SC_HAS_PROCESS(renode_connection);
   if (native || hosted) {
     // If (!native && hosted), passed pointer is later used to register bridges,
@@ -808,6 +867,7 @@ renode_connection::renode_connection(sc_core::sc_module_name name,
         (void *)this, (void *)handle_backward_response_native,
         (void *)handle_backward_response_dmi_native,
         (void *)handle_forward_request_native,
+        &spin_wait_iterations,
         mach.c_str(), peri.c_str());
     if (rc != RENODE_SUCCESS) {
       fprintf(stderr, "Failed to initialize native interface. Aborting.\n");
@@ -890,6 +950,7 @@ void renode_connection::forward_loop() {
 
   while (true) {
     message = receive_forward_request(&closed);
+
     if (closed) {
 #ifdef VERBOSE
       printf("Connection to Renode closed.\n");
@@ -937,10 +998,14 @@ void renode_connection::forward_loop() {
       }
       terminate_simulation(0);
     } break;
-    default:
-      renode_bridge* bridge = bridges[message.initiator_id];
-      bridge->handle_forward_request(message);
-      break;
+    default: {
+      auto bridge = bridges.find(message.initiator_id);
+      if(bridge == bridges.end()) {
+        fprintf(stderr, "No SystemC bridge registered for initiator ID %u.\n", message.initiator_id);
+        terminate_simulation(1);
+      }
+      bridge->second->handle_forward_request(message);
+    } break;
     }
   }
 }

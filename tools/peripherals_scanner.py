@@ -46,6 +46,7 @@ def try_get_category(platform):
         "A2_CV32E40P": "OHG",
         "a20": "ALLWINNER",
         "acrn_x86_64": "X86-64",
+        "alif_ae822fa0e5597bs0": "ALIF",
         "ambiq-apollo4": "AMBIQ",
         "andes_ae350_n25": "ANDES",
         "arduino_101-shield":  "NRF",
@@ -274,6 +275,7 @@ def try_get_category(platform):
         "zynqmp-zcu102-revA":   "ZYNQ",
         "zynqmp-zcu102-revB":   "ZYNQ",
         "zynqmp-zcu104":   "ZYNQ",
+        "zynqmp-zcu106-vcu":    "ZYNQ",
     }
 
     if platform.get_name() not in mapping:

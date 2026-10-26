@@ -1,5 +1,5 @@
 nvic: IRQControllers.NVIC @ sysbus 0xE000E000
-    priorityMask: 0xF0
+    priorityMask: 0xE0
     systickFrequency: 1000000
     IRQ -> cpu@0
 
@@ -297,6 +297,7 @@ flashController: MTD.STM32WBA_FlashController @ sysbus 0x40022000
 
 rng: Miscellaneous.STM32_RNG @ sysbus 0x420c0800
     series: STM32Series.L5
+    IRQ -> nvic@94
 
 adc1: Analog.STM32L5_ADC @ sysbus 0x42028000
     referenceVoltage: 3.3
@@ -307,3 +308,9 @@ adc1: Analog.STM32L5_ADC @ sysbus 0x42028000
 
 iwdg: Timers.STM32_IndependentWatchdog  @ sysbus 0x40003000
     frequency: 32000
+
+usb: USB.STM32_USB @ sysbus 0x4000d400
+    usbSRAM: usb_sram
+    IRQ->nvic@73
+usb_sram: Memory.ArrayMemory @ sysbus 0x4000d800
+    size: 1024

@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Exceptions;
@@ -22,12 +23,14 @@ namespace Antmicro.Renode.RobotFramework
     {
         public RenodeKeywords()
         {
-            monitor = ObjectCreator.Instance.GetSurrogate<Monitor>();
+            monitor = ObjectCreator.Instance.GetSurrogate<UserInterface.Monitor>();
             savepoints = new Dictionary<string, Savepoint>();
             if(!(monitor.Interaction is CommandInteractionWrapper))
             {
                 monitor.Interaction = new CommandInteractionWrapper(monitor.Interaction);
             }
+            EmulationManager.Instance.EmulationChanged += EmulationChangedCallback;
+            EmulationChangedCallback();
         }
 
         public void Dispose()
@@ -35,6 +38,21 @@ namespace Antmicro.Renode.RobotFramework
             var interaction = monitor.Interaction as CommandInteractionWrapper;
             monitor.Interaction = interaction.UnderlyingCommandInteraction;
             TemporaryFilesManager.Instance.Cleanup();
+            EmulationManager.Instance.EmulationChanged -= EmulationChangedCallback;
+            EmulationManager.Instance.CurrentEmulation.MachineStateChanged -= MachineStateChangedCallback;
+        }
+
+        [RobotFrameworkKeyword]
+        public void CrashRenode()
+        {
+            // Any exception thrown from this thread will be caught and reported as a keyword failure,
+            // so if we want the exception to crash the program, it needs to be thrown from another thread
+            var exceptThread = new Thread(() =>
+            {
+                throw new Exception("Induced crash");
+            });
+            exceptThread.Start();
+            Thread.Sleep(Timeout.Infinite);
         }
 
         [RobotFrameworkKeyword]
@@ -146,7 +164,7 @@ namespace Antmicro.Renode.RobotFramework
                 break;
             case HotSpotAction.Serialize:
                 var fileName = TemporaryFilesManager.Instance.GetTemporaryFile();
-                var monitor = ObjectCreator.Instance.GetSurrogate<Monitor>();
+                var monitor = ObjectCreator.Instance.GetSurrogate<UserInterface.Monitor>();
                 if(monitor.Machine != null)
                 {
                     EmulationManager.Instance.CurrentEmulation.AddOrUpdateInBag("monitor_machine", monitor.Machine);
@@ -349,11 +367,13 @@ namespace Antmicro.Renode.RobotFramework
 
         [RobotFrameworkKeyword]
         public string WaitForLogEntry(string pattern, float? timeout = null, bool keep = false, bool treatAsRegex = false,
-            bool? pauseEmulation = null, LogLevel level = null, bool startEmulation = true)
+            bool? pauseEmulation = null, LogLevel level = null, bool startEmulation = true, string machine = null)
         {
             CheckLogTester();
 
-            var result = logTester.WaitForEntry(pattern, out var bufferedMessages, out var isFailingString, timeout, keep, treatAsRegex, pauseEmulation ?? defaultPauseEmulation, level, startEmulation);
+            var result = logTester.WaitForEntry(pattern, out var bufferedMessages, out var isFailingString, timeout,
+                                                keep, treatAsRegex, pauseEmulation ?? defaultPauseEmulation, level,
+                                                startEmulation, machine);
             if(result == null)
             {
                 // We must limit the length of the resulting string to Int32.MaxValue to avoid OutOfMemoryException.
@@ -414,39 +434,29 @@ namespace Antmicro.Renode.RobotFramework
         }
 
         [RobotFrameworkKeyword]
-        public void EnableLoggingToCache()
+        public void OpenLogFile(string path)
         {
-            if(cachedLogFilePath == null)
-            {
-                cachedLogFilePath = Path.Combine(
-                        TemporaryFilesManager.Instance.EmulatorTemporaryPath,
-                        "renode-robot.log");
-                Logger.AddBackend(new FileBackend(cachedLogFilePath, false), CachedLogBackendName, true);
-            }
+            CloseLogFile();
+            fileLogger = new FileBackend(path, false);
+            Logger.AddBackend(fileLogger, RobotLogName, true);
         }
 
         [RobotFrameworkKeyword]
-        public void SaveCachedLog(string filePath)
+        public void CloseLogFile()
         {
-            if(cachedLogFilePath == null)
+            if(fileLogger == null)
             {
-                throw new KeywordException($"Cannot save cached log, cached logging has not been enabled.");
+                return;
             }
-
-            (Logger.GetBackends()[CachedLogBackendName] as FileBackend).Flush();
-            System.IO.File.Copy(cachedLogFilePath, filePath, true);
+            fileLogger.Flush();
+            Logger.RemoveBackend(fileLogger);
+            fileLogger = null;
         }
 
         [RobotFrameworkKeyword]
-        public void ClearCachedLog()
+        public void SetCrashOnAbort(bool enable)
         {
-            if(cachedLogFilePath != null)
-            {
-                Logger.RemoveBackend(Logger.GetBackends()[CachedLogBackendName]);
-                System.IO.File.Delete(cachedLogFilePath);
-                cachedLogFilePath = null;
-                EnableLoggingToCache();
-            }
+            crashOnAbort = enable;
         }
 
         private void CheckLogTester()
@@ -469,15 +479,34 @@ namespace Antmicro.Renode.RobotFramework
             }
         }
 
+        private void MachineStateChangedCallback(IMachine _, MachineStateChangedEventArgs ev)
+        {
+            if(ev.CurrentState != MachineStateChangedEventArgs.State.Aborted)
+            {
+                return;
+            }
+            if(!crashOnAbort)
+            {
+                return;
+            }
+            throw new KeywordException("Machine aborted");
+        }
+
+        private void EmulationChangedCallback()
+        {
+            EmulationManager.Instance.CurrentEmulation.MachineStateChanged += MachineStateChangedCallback;
+        }
+
         private LogTester logTester;
-        private string cachedLogFilePath;
+        private FileBackend fileLogger;
         private bool defaultPauseEmulation;
+        private bool crashOnAbort;
 
         private readonly Dictionary<string, Savepoint> savepoints;
 
-        private readonly Monitor monitor;
+        private readonly UserInterface.Monitor monitor;
 
-        private const string CachedLogBackendName = "cache";
+        private const string RobotLogName = "robot";
         private const int MaxLogContextPrintedOnException = 1000;
 
         public enum ProviderType

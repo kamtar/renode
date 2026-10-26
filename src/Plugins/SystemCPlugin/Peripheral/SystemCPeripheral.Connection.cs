@@ -78,16 +78,6 @@ namespace Antmicro.Renode.Peripherals.SystemC
             bwRequest.Add(message);
         }
 
-        public void HandleForwardResponseFromNative(RenodeMessage message)
-        {
-            fwResponse.Add(message);
-        }
-
-        public void HandleForwardResponseDmiFromNative(DMINativeMessage message)
-        {
-            dmiResponse.Add(message);
-        }
-
         public void Dispose()
         {
             if(useNative)
@@ -108,7 +98,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
 
         public delegate* unmanaged<void*, DMIMessage, void> SendBackwardResponseDmiNative { get; set; }
 
-        public delegate* unmanaged<void*, RenodeMessage, void> SendForwardRequestNative { get; set; }
+        public delegate* unmanaged<void*, RenodeMessage, RenodeMessage*, DMINativeMessage*, int> SendForwardRequestNative { get; set; }
 
         public bool NativeConfigured
         {
@@ -198,6 +188,25 @@ namespace Antmicro.Renode.Peripherals.SystemC
             }
         }
 
+        // Maximum polling iterations before sleeping on the native mailbox.
+        // Zero disables spinning. Configure before establishing the connection.
+        public uint SpinWaitIterations
+        {
+            get => spinWaitIterations;
+            set
+            {
+                if(value == spinWaitIterations)
+                {
+                    return;
+                }
+                if(connectionActive || RenodeConnectionRef != null)
+                {
+                    throw new RecoverableException("Connection is already active");
+                }
+                spinWaitIterations = value;
+            }
+        }
+
         protected void SendBackwardResponse(RenodeMessage message)
         {
             this.Log(LogLevel.Noisy, "Sending bw response. Action: {0} | Address: {1:X} | Payload: {2:X}", message.ActionId, message.Address, message.Payload);
@@ -250,35 +259,23 @@ namespace Antmicro.Renode.Peripherals.SystemC
             }
         }
 
-        protected void SendForwardRequest(RenodeMessage message)
-        {
-            this.Log(LogLevel.Noisy, "Sending fw request. Action: {0} | Address: {1:X} | Payload: {2:X}", message.ActionId, message.Address, message.Payload);
-            if(useNative)
-            {
-                if(!NativeConfigured)
-                {
-                    this.ErrorLog("Trying to send forward request using unconfigured native interface");
-                    return;
-                }
-                SendForwardRequestNative(RenodeConnectionRef, message);
-            }
-            else
-            {
-                try
-                {
-                    forwardSocket?.Send(message.Serialize(), SocketFlags.None);
-                }
-                catch(SocketException)
-                {
-                    this.Log(LogLevel.Error, "Unable to communicate with SystemC peripheral. Try setting SystemCExecutablePath first or WaitForConnection.");
-                    Dispose();
-                }
-            }
-        }
-
         protected virtual void OnUnhandledRenodeMessage(RenodeMessage message)
         {
             this.ErrorLog("SystemC integration error - invalid message type {0} sent through backward connection from the SystemC process.", message.ActionId);
+        }
+
+        private void SendForwardRequestSocket(RenodeMessage message)
+        {
+            this.Log(LogLevel.Noisy, "Sending fw request. Action: {0} | Address: {1:X} | Payload: {2:X}", message.ActionId, message.Address, message.Payload);
+            try
+            {
+                forwardSocket?.Send(message.Serialize(), SocketFlags.None);
+            }
+            catch(SocketException)
+            {
+                this.Log(LogLevel.Error, "Unable to communicate with SystemC peripheral. Try setting SystemCExecutablePath first or WaitForConnection.");
+                Dispose();
+            }
         }
 
         private void StartSystemCProcess(string systemcExecutablePath, string connectionParams)
@@ -453,20 +450,6 @@ namespace Antmicro.Renode.Peripherals.SystemC
             return true;
         }
 
-        private bool ReceiveForwardResponseNative(out RenodeMessage message)
-        {
-            message = new RenodeMessage();
-            try
-            {
-                message = fwResponse.Take();
-            }
-            catch(InvalidOperationException)
-            {
-                return false;
-            }
-            return true;
-        }
-
         private bool ReceiveForwardResponseSocket(out RenodeMessage message)
         {
             message = new RenodeMessage();
@@ -482,46 +465,7 @@ namespace Antmicro.Renode.Peripherals.SystemC
             }
 
             message.Deserialize(recvBytes);
-            return true;
-        }
-
-        private bool ReceiveForwardResponse(out RenodeMessage message)
-        {
-            message = new RenodeMessage();
-            if(useNative)
-            {
-                if(!NativeConfigured)
-                {
-                    this.ErrorLog("Trying to receive fw response using unconfigured native interface");
-                    return false;
-                }
-                if(!ReceiveForwardResponseNative(out message))
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                if(!ReceiveForwardResponseSocket(out message))
-                {
-                    return false;
-                }
-            }
             this.Log(LogLevel.Noisy, "Received fw response. Action: {0} | Address: {1:X} | Payload: {2:X}", message.ActionId, message.Address, message.Payload);
-            return true;
-        }
-
-        private bool ReceiveForwardResponseDmiNative(out DMINativeMessage message)
-        {
-            message = new DMINativeMessage();
-            try
-            {
-                message = dmiResponse.Take();
-            }
-            catch(InvalidOperationException)
-            {
-                return false;
-            }
             return true;
         }
 
@@ -540,50 +484,57 @@ namespace Antmicro.Renode.Peripherals.SystemC
             }
 
             message.Deserialize(recvBytes);
-            return true;
-        }
-
-        private bool ReceiveForwardResponseDmi(out DMINativeMessage message)
-        {
-            message = new DMINativeMessage();
-            if(useNative)
-            {
-                if(!NativeConfigured)
-                {
-                    this.ErrorLog("Trying to receive fw response dmi using unconfigured native interface");
-                    return false;
-                }
-                if(!ReceiveForwardResponseDmiNative(out message))
-                {
-                    return false;
-                }
-            }
-            else
-            {
-                if(!ReceiveForwardResponseDmiSocket(out message))
-                {
-                    return false;
-                }
-            }
             this.Log(LogLevel.Noisy, "Received fw response dmi. Action: {0} | StartAddress: {1:X} | EndAddress: {2:X} | Pointer: {3:X}", message.ActionId, message.StartAddress, message.EndAddress, message.Pointer);
             return true;
         }
 
         private bool SendRequest(RenodeMessage request, out RenodeMessage responseMessage)
         {
+            this.Log(LogLevel.Noisy, "Sending fw request. Action: {0} | Address: {1:X} | Payload: {2:X}", request.ActionId, request.Address, request.Payload);
             lock(messageLock)
             {
-                SendForwardRequest(request);
-                return ReceiveForwardResponse(out responseMessage);
+                if(useNative)
+                {
+                    if(!NativeConfigured)
+                    {
+                        this.ErrorLog("Trying to send forward request using unconfigured native interface");
+                        responseMessage = new RenodeMessage();
+                        return false;
+                    }
+
+                    var response = new RenodeMessage();
+                    var success = SendForwardRequestNative(RenodeConnectionRef, request, &response, null) != 0;
+                    responseMessage = response;
+                    return success;
+                }
+
+                SendForwardRequestSocket(request);
+                return ReceiveForwardResponseSocket(out responseMessage);
             }
         }
 
         private bool SendDmiRequest(RenodeMessage request, out DMINativeMessage dmiNativeMessage)
         {
+            this.Log(LogLevel.Noisy, "Sending fw DMI request. Action: {0} | Address: {1:X}", request.ActionId, request.Address);
             lock(messageLock)
             {
-                SendForwardRequest(request);
-                return ReceiveForwardResponseDmi(out dmiNativeMessage);
+                if(useNative)
+                {
+                    if(!NativeConfigured)
+                    {
+                        this.ErrorLog("Trying to send forward request using unconfigured native interface");
+                        dmiNativeMessage = new DMINativeMessage();
+                        return false;
+                    }
+
+                    var response = new DMINativeMessage();
+                    var success = SendForwardRequestNative(RenodeConnectionRef, request, null, &response) != 0;
+                    dmiNativeMessage = response;
+                    return success;
+                }
+
+                SendForwardRequestSocket(request);
+                return ReceiveForwardResponseDmiSocket(out dmiNativeMessage);
             }
         }
 
@@ -594,13 +545,12 @@ namespace Antmicro.Renode.Peripherals.SystemC
         private string address;
         private int requestedPort;
         private bool useNative;
+        private uint spinWaitIterations = 1024;
         private bool backwardThreadStarted;
         private bool connectionActive;
 
         private readonly Thread backwardThread;
         private readonly BlockingCollection<RenodeMessage> bwRequest = new BlockingCollection<RenodeMessage>(boundedCapacity: 1);
-        private readonly BlockingCollection<RenodeMessage> fwResponse = new BlockingCollection<RenodeMessage>(boundedCapacity: 1);
-        private readonly BlockingCollection<DMINativeMessage> dmiResponse = new BlockingCollection<DMINativeMessage>(boundedCapacity: 1);
         private readonly bool disableTimeoutCheck;
         private readonly object messageLock;
     }

@@ -3,9 +3,11 @@
 - src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj
 - tests/unit-tests/RenodeTests/RenodeTests.csproj
 - lib/options-parser/OptionsParserTests.csproj
+- lib/Migrant/Tests/Tests.csproj
 
 - heavy_tests:
   - tests/platforms/zynqmp.robot
+  - tests/platforms/zynqmp_linux.robot
   - tests/peripherals/MCAN.robot
   - tests/platforms/Zedboard.robot
   - tests/peripherals/VirtIO.robot
@@ -17,6 +19,7 @@
   - tests/platforms/Renesas_RZ_G2L.robot
   - tests/platforms/SiFive-FU540.robot
 
+- tests/peripherals/INA228.robot
 - tests/peripherals/SDCard.robot
 - tests/peripherals/VEML7700.robot
 - tests/peripherals/STM32LTDC.robot
@@ -46,6 +49,7 @@
 - tests/unit-tests/riscv-unit-tests.robot
 - tests/unit-tests/riscv-priv.robot
 - tests/unit-tests/riscv-amocas.robot
+- tests/unit-tests/riscv-zicond-extension.robot
 - tests/unit-tests/mpu.robot
 - tests/unit-tests/arm-atomic.robot
 - tests/unit-tests/armv8-load-store-exclusive.robot
@@ -245,6 +249,7 @@
 - tests/platforms/X86_64KVM.robot
 - tests/unit-tests/riscv-external-pmp.robot
 - tests/unit-tests/riscv-bkb.robot
+- tests/unit-tests/memory-assertions.robot
 - tests/platforms/egis_et171-zephyr.robot
 - tests/peripherals/AndesATCPIT100.robot
 - tests/peripherals/AndesNCEPLIC100.robot
@@ -276,6 +281,15 @@
 - tests/peripherals/STM32H7_RCC.robot
 - tests/unit-tests/hst-mmio.robot
 - tests/peripherals/STM32_UART.robot
+- tests/peripherals/IIS2MDC.robot
+- tests/unit-tests/arm-cortex-m-exception-return.robot
+- tests/unit-tests/opcodes-execution-hooks.robot
+- tests/platforms/nucleo_f767zi_wallabmc.robot
+- tests/unit-tests/arm-cortex-m-interrupts.robot
+- tests/native-interface/bus-handlers.robot
+- tests/platforms/ramn-terminal.robot
+- tests/peripherals/ST7789.robot
+- tests/tools/renode-test.robot
 
 - signal_handling:
   - tests/unit-tests/signal_handling.robot
@@ -311,3 +325,9 @@
 
 - port_3344:
   - tests/external-control/external-control.robot
+
+- port_3345:
+  - tests/external-control/renode-to-renode.robot
+
+- port_3346:
+  - tests/unit-tests/gdb/gdb_multiprocess.robot

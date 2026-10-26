@@ -11,7 +11,7 @@ cp -r $BASE/tests/network-server $DIR/tests/network-server
 cp -r $BASE/tests/network-logging $DIR/tests/network-logging
 cp -r $BASE/tests/peripherals $DIR/tests/peripherals
 cp -r $BASE/tests/platforms $DIR/tests/platforms
-cp -r $BASE/tests/{robot_tests_provider,run_tests,tests_engine,robot_output_formatter,robot_output_formatter_verbose,helper,retry_and_timeout_listener,segmenting,monitoring,unstable_tests}.py $DIR/tests
+cp -r $BASE/tests/{robot_tests_provider,run_tests,tests_engine,robot_output_formatter,robot_output_formatter_verbose,helper,retry_and_timeout_listener,segmenting,monitoring,unstable_tests,state_dependency_listener}.py $DIR/tests
 cp -r $BASE/tests/{renode-keywords,example}.robot $DIR/tests
 cp -r $BASE/tests/tools $DIR/tests/tools
 cp -r $BASE/tests/tests.yaml $DIR/tests/tests.yaml
@@ -24,6 +24,8 @@ cp -r $BASE/tools/sel4_extensions $DIR/tools
 cp -r $BASE/tools/csv2resd $DIR/tools
 cp -r $BASE/tools/external_control_client $DIR/tools
 cp -r $BASE/tools/NativeInterface $DIR/tools
+# index.html is available only when Renode is built with --ui flag
+cp -r $BASE/index.html $DIR || true
 rm -rf $DIR/tools/NativeInterface/example/build
 # Only the C example and CMake helpers are useful in the package (they are
 # used by the native-interface robot tests and serve as user documentation
