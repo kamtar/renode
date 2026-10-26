@@ -79,7 +79,7 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
 
             lock(innerLock)
             {
-                if(linkLayerToMedium[layer] == typeOfInterface)
+                if(linkLayerToMedium[layer].Contains(typeOfInterface))
                 {
                     return true;
                 }
@@ -223,7 +223,7 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
         {
             lock(innerLock)
             {
-                if(linkLayerToMedium[layer] == typeof(BLEMedium))
+                if(linkLayerToMedium[layer].Contains(typeof(BLEMedium)))
                 {
                     buffer = bleSniffer.InsertHeaderToPacket((IRadio)sender, buffer);
                 }
@@ -264,12 +264,12 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
         private readonly object innerLock = new object();
         private readonly BLESniffer bleSniffer;
 
-        private readonly Dictionary<LinkLayer, Type> linkLayerToMedium = new Dictionary<LinkLayer, Type>
+        private readonly Dictionary<LinkLayer, HashSet<Type>> linkLayerToMedium = new Dictionary<LinkLayer, HashSet<Type>>
         {
-            {LinkLayer.Ethernet, typeof(Switch)},
-            {LinkLayer.IEEE802_15_4, typeof(IEEE802_15_4Medium)},
-            {LinkLayer.Bluetooth_LE, typeof(BLEMedium)},
-            {LinkLayer.CAN, typeof(CANHub)},
+            {LinkLayer.Ethernet, new HashSet<Type> { typeof(Switch) }},
+            {LinkLayer.IEEE802_15_4, new HashSet<Type> { typeof(IEEE802_15_4Medium), typeof(UwbMedium) }},
+            {LinkLayer.Bluetooth_LE, new HashSet<Type> { typeof(BLEMedium) }},
+            {LinkLayer.CAN, new HashSet<Type> { typeof(CANHub) }},
         };
     }
 }

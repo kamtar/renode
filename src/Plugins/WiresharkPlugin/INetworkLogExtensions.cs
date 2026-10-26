@@ -28,6 +28,11 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             CreateIEEE802_15_4ConfiguredWireshark(emulation, name);
         }
 
+        public static void CreateWiresharkForUwb(this Emulation emulation, string name)
+        {
+            CreateUwbConfiguredWireshark(emulation, name);
+        }
+
         public static void CreateWiresharkForCAN(this Emulation emulation, string name)
         {
             CreateCANConfiguredWireshark(emulation, name);
@@ -78,6 +83,18 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             emulation.ExternalsManager.ExternalsChanged += AddExternal;
         }
 
+        public static void LogUwbTraffic(this Emulation emulation)
+        {
+            var result = CreateUwbConfiguredWireshark(emulation, UwbLogName);
+            foreach(var uwb in emulation.ExternalsManager.GetExternalsOfType<UwbMedium>())
+            {
+                result.LogToWireshark((INetworkLog<INetworkInterface>)uwb);
+            }
+
+            emulation.ExternalsManager.ExternalsChanged -= AddExternal;
+            emulation.ExternalsManager.ExternalsChanged += AddExternal;
+        }
+
         public static void LogEthernetTraffic(this Emulation emulation)
         {
             var result = CreateEthernetConfiguredWireshark(emulation, EthernetLogName);
@@ -113,6 +130,7 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             var external = reporter.External;
             var bleResult = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(BLELogName, out var bleWiresharkFound);
             var ieee802_15_4Result = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(IEEE802_15_4LogName, out var ieee802_15_4WiresharkFound);
+            var uwbResult = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(UwbLogName, out var uwbWiresharkFound);
             var ethernetResult = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(EthernetLogName, out var ethernetWiresharkFound);
             var canResult = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(CANLogName, out var canWiresharkFound);
 
@@ -124,6 +142,11 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             if(bleWiresharkFound && external is BLEMedium)
             {
                 bleResult.LogToWireshark((BLEMedium)external);
+            }
+
+            if(uwbWiresharkFound && external is UwbMedium)
+            {
+                uwbResult.LogToWireshark((UwbMedium)external);
             }
 
             if(ethernetWiresharkFound && external is Switch)
@@ -143,6 +166,10 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             {
                 return CreateIEEE802_15_4ConfiguredWireshark(emulation, hostName);
             }
+            else if(reporter is UwbMedium)
+            {
+                return CreateUwbConfiguredWireshark(emulation, hostName);
+            }
             else if(reporter is BLEMedium)
             {
                 return CreateBLEConfiguredWireshark(emulation, hostName);
@@ -157,7 +184,7 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             }
             else
             {
-                throw new ArgumentException("Expected CANHub, Switch, BLEMedium or IEEE802_15_4Medium.");
+                throw new ArgumentException("Expected CANHub, Switch, BLEMedium, IEEE802_15_4Medium or UwbMedium.");
             }
         }
 
@@ -178,6 +205,18 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
             var result = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(name, out var wirelessWiresharkFound);
 
             if(wirelessWiresharkFound)
+            {
+                return result;
+            }
+
+            return CreateWireshark(emulation, name, LinkLayer.IEEE802_15_4);
+        }
+
+        private static Wireshark CreateUwbConfiguredWireshark(Emulation emulation, string name)
+        {
+            var result = (Wireshark)EmulationManager.Instance.CurrentEmulation.HostMachine.TryGetByName(name, out var uwbWiresharkFound);
+
+            if(uwbWiresharkFound)
             {
                 return result;
             }
@@ -262,6 +301,7 @@ namespace Antmicro.Renode.Plugins.WiresharkPlugin
         private const string WiresharkExternalPrefix = "wireshark";
         private const string BLELogName = WiresharkExternalPrefix + "-" + "allBLETraffic";
         private const string IEEE802_15_4LogName = WiresharkExternalPrefix + "-" + "allIEEE802_15_4Traffic";
+        private const string UwbLogName = WiresharkExternalPrefix + "-" + "allUWBTraffic";
         private const string EthernetLogName = WiresharkExternalPrefix + "-" + "allEthernetTraffic";
         private const string CANLogName = WiresharkExternalPrefix + "-" + "allCANTraffic";
         private const string WiresharkPathWindows = @"c:\Program Files\Wireshark\Wireshark.exe";
